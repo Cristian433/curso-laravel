@@ -1,0 +1,2388 @@
+import java.nio.channels.UnresolvedAddressException;
+import java.rmi.RemoteException;
+
+import org.apache.axis2.AxisFault;
+import org.apache.axis2.client.Options;
+import org.apache.axis2.transport.http.HTTPConstants;
+
+import mx.com.findur_valmer.www.consultainfoinstrumentos.consinstport.ConsInstPortStub;
+
+import com.afore.enums.EnumTypeMessage;
+import com.afore.enums.EnumsInstrumentsMX;
+import com.afore.enums.EnumsTranInfoFields;
+import com.afore.fmwk_webservice_abstract.FMWK_Abstract_WebService;
+import com.olf.openjvs.DBUserTable;
+import com.olf.openjvs.DBaseTable;
+import com.olf.openjvs.Instrument;
+import com.olf.openjvs.OException;
+import com.olf.openjvs.Str;
+import com.olf.openjvs.Table;
+import com.olf.openjvs.Transaction;
+import com.olf.openjvs.Util;
+import com.olf.openjvs.XString;
+import com.olf.openjvs.enums.COL_TYPE_ENUM;
+import com.olf.openjvs.enums.OLF_RETURN_CODE;
+import com.olf.openjvs.enums.SEARCH_ENUM;
+import com.olf.openjvs.enums.TRAN_STATUS_ENUM;
+import com.olf.openjvs.enums.TRAN_TYPE_ENUM;
+
+public class FMWK_Implement_WebService_Bursatilidad extends
+		FMWK_Abstract_WebService {
+
+	private static final String USER_NIVELBURSATILIDAD = "user_nivelbursatilidad";
+	private static final String PROCESO = "Imp_ValmerScene";
+	private static final String BURSATILIDADNULA = "NULA";
+	private static final String STATUS_INSTRUMENT = "0";
+	private static final String CABECERAXML = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
+
+	public FMWK_Implement_WebService_Bursatilidad(int Request)
+			throws OException {
+		super(Request);
+		// TODO Auto-generated constructor stub
+	}
+
+	@Override
+	public void importDataWS() {
+		try {
+			// URL Endpoint
+			String sUrl = UTILGLOBAL.getVariableGlobal(SISTEMA_CONF_VAR,PROCESO, "wsdl");
+
+			LOG.printMsg(EnumTypeMessage.INFO, "URL: " + sUrl);
+
+			// Get XML request
+			String sXML = this.getXMLRequest();
+
+			LOG.printMsg(EnumTypeMessage.INFO, "Request: " + sXML);
+/*
+			CallWS ws = new CallWS(sUrl, sXML);
+			String sResponse = ws.call(sUrl, sXML);
+			*/
+			String sResponse = call_new(sUrl, sXML);
+			
+
+			LOG.printMsg(EnumTypeMessage.INFO, "Response: " + sResponse);
+			
+			if (sResponse !=null){
+				// XML to Table
+				XString xstring = Str.xstringNew();
+				Table tblXML = Table.xmlStringToTable(CABECERAXML+sResponse);
+	
+				String error_msg = Str.xstringGetString(xstring);
+	
+				if (Str.iEqual(error_msg, "") == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.toInt()) {
+	
+					LOG.printMsg(EnumTypeMessage.INFO, "Successful XML To Table");
+					int retval = tblXML.condenseTable();
+
+					if (retval == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.toInt()) {
+						LOG.printMsg(EnumTypeMessage.INFO,"Condensing XML table successful");
+//						tblXML.viewTable();
+						// Load data in tran info field from valmer web service
+						this.doLoadInstrumentBursatility(tblXML);				
+	
+					} else {
+						LOG.printMsg(EnumTypeMessage.ERROR,"Not able to condense xml table");
+					}
+				} else {
+					LOG.printMsg(EnumTypeMessage.ERROR,"Not able to convert xml to table");
+					LOG.printMsg(EnumTypeMessage.ERROR, "Error: " + error_msg);
+				}
+				tblXML.destroy();
+			}else{
+				LOG.printMsg(EnumTypeMessage.ERROR, "Not response from webservice");			
+			}
+			//Load data in tran info field from risk class
+			//this.doLoadInstrumentBursatilityRiskClass();
+			
+		} catch (UnresolvedAddressException uae) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "UnresolvedAddressException:"+ uae.getMessage());
+			Util.exitFail();
+		} catch (NullPointerException npe) {
+			LOG.printMsg(EnumTypeMessage.ERROR,"NullPointerException:" + npe.getMessage());
+			Util.exitFail();
+		} catch (OException o) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "OException: " + o.getMessage());
+			Util.exitFail();
+		} catch (Exception e) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "Exception:" + e.getMessage());
+			Util.exitFail();
+		} finally {
+			
+			LOG.markEndScript();
+		}
+	}
+
+	@Override
+	public String getXMLRequest() throws OException {
+		Table tIns = new Table();
+		String sQuery = "\n SELECT ins.ins_num, ins.ticker FROM "
+				+ "\n ab_tran abtran, " 
+				+ "\n header ins "
+				+ "\n WHERE tran_type="+ TRAN_TYPE_ENUM.TRAN_TYPE_HOLDING.toInt()
+				+ "\n AND abtran.ins_num=ins.ins_num "
+				//+ "\n AND abtran.ins_type <> " + EnumsInstrumentsMX.MX_EQTINT.toInt()
+				+ "\n AND abtran.tran_status="+ TRAN_STATUS_ENUM.TRAN_STATUS_VALIDATED.toInt()
+				+ "\n AND ins.ticker is not null "
+				+ "\n and ins.ins_type != " + EnumsInstrumentsMX.MX_EQTINT.toInt();
+
+		DBaseTable.execISql(tIns, sQuery);
+		String sTicker = "",sInstrumento = "",sXML = "";
+
+		sXML = sXML + "\n <consulta><tipoConsulta>" + REQUESTTYPE+ "</tipoConsulta>";
+		
+		for (int iRow = 1; iRow <= tIns.getNumRows(); iRow++) {
+			sTicker = tIns.getString("ticker", iRow);
+
+			if (!sTicker.equals("") && sTicker != null) {
+					sInstrumento= "\n <instrumento> "+ 								 
+							"\n <ticker>"+sTicker+"</ticker> "+ 
+							"\n </instrumento> "; 
+
+					sXML = sXML + sInstrumento;			
+			}
+		}
+
+		sXML = sXML + "\n </consulta>";
+		return sXML;
+	}
+
+	private void doLoadInstrumentBursatility(Table tblXml) throws OException {
+		try {
+			// Validate XML
+			Table tResp = tblXml.getTable("ws_resp", 1);
+			if (Table.isTableValid(tResp) == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.jvsValue()) {
+				int iRes = tResp.getInt("status", 1);
+				if (iRes == 1) {
+					String errMsg = tResp.getString("descripcion", 1);
+					LOG.printMsg(EnumTypeMessage.ERROR, errMsg);
+					Util.exitFail();
+				} else {
+					// Getting data from XML
+					Table tBurValmer = tblXml.getTable("bursatilidades", 1);
+					
+					Table tTranNumTicker = UTILGLOBAL.getTranNumToTicker(LOG);
+					
+					tBurValmer.select(tTranNumTicker, "tran_num", "ticker EQ $ticker");
+					
+					Table tBursatilidad = getBursatilidad();
+					
+					tBurValmer.select(tBursatilidad, "nivel_bursatilidad", "id_ws EQ $bursatilidad");
+					
+//					this.getExtraInstrumentInfo(tBurValmer);
+
+					for (int iRow = 1; iRow <= tBurValmer.getNumRows(); iRow++) {
+						
+						if (tBurValmer.getString("estatusInstumento",iRow).equalsIgnoreCase(STATUS_INSTRUMENT)){
+							
+							Table tTranInfo = Table.tableNew("tblTranInfo");
+	
+//							int iInsNum = tBurValmer.getInt("instrument_ins_num", iRow);
+							int iTranNum = tBurValmer.getInt("tran_num", iRow);
+	
+//							if(iTranNum == 63616){
+////								tBurValmer.viewTable();
+//							}
+							// Getting Instrument Number
+//							Instrument ins = Instrument.retrieve(iInsNum);
+	
+							// Getting Tran Info
+//							Transaction tran = Transaction.getTranFromIns(ins);
+							Transaction tran = Transaction.retrieve(iTranNum);
+							tTranInfo = tran.getTranInfo();
+	
+							tTranInfo.group("Type");
+							int iFirs_row = tTranInfo.findString("Type",EnumsTranInfoFields.MX_ALL_INS_BURSATILIDAD.toString(),SEARCH_ENUM.FIRST_IN_GROUP);
+
+							// Saving new value 
+//							String sBursatilidad = this.getBursatilityById(tBurValmer.getInt("bursatilidad", iRow)+1);
+							String sBursatilidad = tBurValmer.getString("nivel_bursatilidad", iRow);
+							
+							tTranInfo.setString("Value", iFirs_row, sBursatilidad);
+							int iRetval = tran.saveTranInfo();
+							
+							if (iRetval == 0) {
+								LOG.printMsg(EnumTypeMessage.ERROR," El Ins Info "+ EnumsTranInfoFields.MX_ALL_INS_BURSATILIDAD.toString()+ "no pudo ser guardado para el instumento "+tBurValmer.getString("ticker",iRow)+".");
+							}
+							tTranInfo.destroy();
+						}else{						
+							LOG.printMsg(EnumTypeMessage.INFO, tBurValmer.getString("descripcionInstrumento",iRow)+" para el instrumento: "+tBurValmer.getString("ticker",iRow)+".");
+						}
+					}
+					tBurValmer.destroy();
+				}
+			}
+		} catch (OException e) {
+			LOG.printMsg(EnumTypeMessage.ERROR, e.getMessage());
+		}
+	}
+
+	private Table getBursatilidad() throws OException {
+		Table tNivelBursatilidad = Table.tableNew();
+		tNivelBursatilidad.setTableName(USER_NIVELBURSATILIDAD);
+		DBUserTable.load(tNivelBursatilidad);
+		return tNivelBursatilidad;
+	}
+
+	/**
+	 * This method add the ins_num to response table
+	 * 
+	 * @return void
+	 * @throws OException
+	 * */
+	private void getExtraInstrumentInfo(Table tInsValmer) throws OException {
+		tInsValmer.addCol("instrument_ins_num", COL_TYPE_ENUM.COL_INT);
+		/*
+		 * Get the instrument numbers of the templates and fill into the import
+		 * table.
+		 */
+		for (int iRow = 1; iRow <= tInsValmer.getNumRows(); iRow++) {
+
+			Table tSql = Table.tableNew();
+			//String sTicker = tInsValmer.getString("tipo_valor", iRow) + "_"+ tInsValmer.getString("emisor", iRow) + "_"+ tInsValmer.getString("serie", iRow);
+			String sTicker = tInsValmer.getString("ticker", iRow);
+			
+			LOG.printMsg(EnumTypeMessage.INFO,"Getting ins_num and market_px for instrument with reference: "+ sTicker);
+			
+			String sSql = "SELECT  ab.ins_num " + " FROM ab_tran  ab"
+					+ " WHERE  ab.reference like '%" + sTicker + "%'"
+					+ " AND ab.tran_status = "+ TRAN_STATUS_ENUM.TRAN_STATUS_VALIDATED.toInt()
+					+ " AND ab.tran_type = "+ TRAN_TYPE_ENUM.TRAN_TYPE_HOLDING.toInt();
+
+			DBaseTable.execISql(tSql, sSql);
+			if (tSql.getNumRows() == 1) {
+				int instrument_ins_num = tSql.getInt(1, 1);
+				tInsValmer.setInt("instrument_ins_num", iRow,instrument_ins_num);
+
+				LOG.printMsg(EnumTypeMessage.INFO,"ins_num for instrument with reference: " + sTicker+ " is " + instrument_ins_num);
+
+			} else {
+				LOG.printMsg(EnumTypeMessage.INFO,"INFO: ins_num for instrument with reference: "+ sTicker + " not found.");
+			}
+			tSql.destroy();
+		}
+	}
+	
+	public void doLoadInstrumentBursatilityRiskClass() throws OException {
+		Table tIns = new Table();
+		
+		String sQuery = "\n SELECT ins.ins_num, ins.ticker FROM "
+				+ "\n ab_tran abtran, " 
+				+ "\n header ins "
+				+ "\n WHERE tran_type="+ TRAN_TYPE_ENUM.TRAN_TYPE_HOLDING.toInt()
+				+ "\n AND abtran.ins_num=ins.ins_num "
+				+ "\n AND abtran.tran_status="+ TRAN_STATUS_ENUM.TRAN_STATUS_VALIDATED.toInt()
+				+ "\n AND abtran.ins_type <> " + EnumsInstrumentsMX.MX_EQTINT.toInt() 
+				+ "\n AND ins.ticker is not null ";
+				//+ "\n AND ROWNUM<5 ";
+
+		DBaseTable.execISql(tIns, sQuery);
+
+		for (int iRow = 1; iRow <= tIns.getNumRows(); iRow++) {
+			
+			Table tTranInfo = Table.tableNew("tblTranInfo");
+			int iInsNum = tIns.getInt("ins_num", iRow);
+
+			// Getting Instrument Number
+			Instrument ins = Instrument.retrieve(iInsNum);
+			
+			// Getting Tran Info
+			Transaction tran = Transaction.getTranFromIns(ins);
+			tTranInfo = tran.getTranInfo();
+			LOG.printMsg(EnumTypeMessage.INFO,"----DEBUG----");
+			tTranInfo.group("Type");
+			int iFirs_row = tTranInfo.findString("Type",EnumsTranInfoFields.MX_ALL_INS_BURSATILIDAD.toString(),SEARCH_ENUM.FIRST_IN_GROUP);
+			String sBursatility = tTranInfo.getString("Value", iFirs_row);
+			LOG.printMsg(EnumTypeMessage.INFO,"Bursatility: "+sBursatility);
+			if ((sBursatility == null) || (sBursatility.isEmpty()) ) {
+				LOG.printMsg(EnumTypeMessage.INFO,"Adding bursatility to the instrument with ins number is: " + iInsNum);
+
+				iFirs_row = tTranInfo.findString("Type", "FITCH_GLOB_LP",SEARCH_ENUM.FIRST_IN_GROUP);
+				String sFitch_Glob_LP = tTranInfo.getString("Value", iFirs_row);
+				LOG.printMsg(EnumTypeMessage.INFO,"FITCH_GLOB_LP: "+sFitch_Glob_LP);
+				iFirs_row = tTranInfo.findString("Type", "HRRATINGS_GLOB_LP",SEARCH_ENUM.FIRST_IN_GROUP);
+				String sHratings_Glob_LP = tTranInfo.getString("Value",iFirs_row);
+				LOG.printMsg(EnumTypeMessage.INFO,"HRRATINGS_GLOB_LP: "+sHratings_Glob_LP);
+				iFirs_row = tTranInfo.findString("Type", "MOODYS_GLOB_LP",SEARCH_ENUM.FIRST_IN_GROUP);
+				String sMoodys_Glob_LP = tTranInfo.getString("Value", iFirs_row);
+				LOG.printMsg(EnumTypeMessage.INFO,"MOODYS_GLOB_LP: "+sMoodys_Glob_LP);
+				iFirs_row = tTranInfo.findString("Type", "S&P_GLOB_LP",SEARCH_ENUM.FIRST_IN_GROUP);
+				String sSP_Glob_LP = tTranInfo.getString("Value", iFirs_row);
+				LOG.printMsg(EnumTypeMessage.INFO,"S&P_GLOB_LP: "+sSP_Glob_LP);
+				iFirs_row = tTranInfo.findString("Type", "FITCH_LOC_LP",SEARCH_ENUM.FIRST_IN_GROUP);
+				String sFitch_Loc_LP = tTranInfo.getString("Value", iFirs_row);
+				LOG.printMsg(EnumTypeMessage.INFO,"FITCH_LOC_LP: "+sFitch_Loc_LP);
+				iFirs_row = tTranInfo.findString("Type", "HRRATINGS_LOC_LP",SEARCH_ENUM.FIRST_IN_GROUP);
+				String sHratings_Loc_LP = tTranInfo.getString("Value",iFirs_row);
+				LOG.printMsg(EnumTypeMessage.INFO,"HRRATINGS_LOC_LP: "+sHratings_Loc_LP);
+				iFirs_row = tTranInfo.findString("Type", "MOODYS_LOC_LP",SEARCH_ENUM.FIRST_IN_GROUP);
+				String sMoodys_Loc_LP = tTranInfo.getString("Value", iFirs_row);
+				LOG.printMsg(EnumTypeMessage.INFO,"MOODYS_LOC_LP: "+sMoodys_Loc_LP);
+				iFirs_row = tTranInfo.findString("Type", "S&P_LOC_LP",SEARCH_ENUM.FIRST_IN_GROUP);
+				String sSP_Loc_LP = tTranInfo.getString("Value", iFirs_row);
+				LOG.printMsg(EnumTypeMessage.INFO,"S&P_LOC_LP: "+sSP_Loc_LP);
+				
+				LOG.printMsg(EnumTypeMessage.INFO,"CONCATENACION: "+sFitch_Glob_LP + sHratings_Glob_LP + sMoodys_Glob_LP.toUpperCase() + sSP_Glob_LP + sFitch_Loc_LP + sHratings_Loc_LP + sMoodys_Loc_LP.toUpperCase() + sSP_Loc_LP);
+				sBursatility = this.calculateBursatility(sFitch_Glob_LP + sHratings_Glob_LP + sMoodys_Glob_LP.toUpperCase() + sSP_Glob_LP + sFitch_Loc_LP + sHratings_Loc_LP + sMoodys_Loc_LP.toUpperCase() + sSP_Loc_LP);
+				
+				LOG.printMsg(EnumTypeMessage.INFO,"Bursatilidad Calculada: "+sBursatility);
+				iFirs_row = tTranInfo.findString("Type",EnumsTranInfoFields.MX_ALL_INS_BURSATILIDAD.toString(),SEARCH_ENUM.FIRST_IN_GROUP);
+				tTranInfo.setString("Value", iFirs_row, sBursatility);
+				int iRetval = tran.saveTranInfo();
+
+				if (iRetval == 0) {
+					LOG.printMsg(EnumTypeMessage.ERROR," El Ins Info "+ EnumsTranInfoFields.MX_ALL_INS_BURSATILIDAD.toString()+ "no pudo ser guardado.");
+				}
+			}
+			tTranInfo.destroy();
+		}
+		tIns.destroy();
+	}
+
+	public String calculateBursatility(String sRiskClass) throws OException {
+		String sBursatility = "";
+		Table tNivelBursatilidad = Table.tableNew();
+		tNivelBursatilidad.setTableName(USER_NIVELBURSATILIDAD);
+		DBUserTable.load(tNivelBursatilidad);
+
+		if (sRiskClass.indexOf("AAA") != -1) {
+			for (int iRow = 1; iRow <= tNivelBursatilidad.getNumRows(); iRow++) {
+				if (tNivelBursatilidad.getString("clasificacion_riesgo_ins",iRow).indexOf("AAA") != -1) {
+					sBursatility = tNivelBursatilidad.getString("nivel_bursatilidad", iRow);
+				}
+			}
+		} else if (sRiskClass.indexOf("AA") != -1) {
+			for (int iRow = 1; iRow <= tNivelBursatilidad.getNumRows(); iRow++) {
+				if (tNivelBursatilidad.getString("clasificacion_riesgo_ins",iRow).indexOf("AA") != -1) {
+					sBursatility = tNivelBursatilidad.getString("nivel_bursatilidad", iRow);
+				}
+			}
+		} else if (sRiskClass.indexOf("A") != -1) {
+			for (int iRow = 1; iRow <= tNivelBursatilidad.getNumRows(); iRow++) {
+				if (tNivelBursatilidad.getString("clasificacion_riesgo_ins",iRow).indexOf("A") != -1) {
+					sBursatility = tNivelBursatilidad.getString("nivel_bursatilidad", iRow);
+				}
+			}
+		} else if (sRiskClass.indexOf("BBB") != -1) {
+			for (int iRow = 1; iRow <= tNivelBursatilidad.getNumRows(); iRow++) {
+				if (tNivelBursatilidad.getString("clasificacion_riesgo_ins",iRow).indexOf("BBB") != -1) {
+					sBursatility = tNivelBursatilidad.getString("nivel_bursatilidad", iRow);
+				}
+			}
+		} else {
+			sBursatility = BURSATILIDADNULA;
+		}
+		tNivelBursatilidad.destroy();
+		return sBursatility;
+	}
+	
+	public String getBursatilityById(int iClasificacion) throws OException{
+		String sBursatility = "";
+		Table tNivelBursatilidad = Table.tableNew();
+		tNivelBursatilidad.setTableName(USER_NIVELBURSATILIDAD);
+		DBUserTable.load(tNivelBursatilidad);
+		for (int iRow = 1; iRow <= tNivelBursatilidad.getNumRows(); iRow++) {
+			if (tNivelBursatilidad.getInt("id",iRow) == iClasificacion){
+				sBursatility = tNivelBursatilidad.getString("nivel_bursatilidad", iRow);
+			}	
+		}
+		tNivelBursatilidad.destroy();
+		return sBursatility;	
+	}
+	
+	
+	
+
+	 public String call_new(String sHost, String xml_string) {
+	     ConsInstPortStub stub = null;
+	    try
+	    {
+			stub = new ConsInstPortStub(sHost);
+		}
+	     catch (AxisFault e) {
+	    	 LOG.printMsg(EnumTypeMessage.ERROR, e.getMessage());
+	    }
+	    
+	
+	
+	    ConsInstPortStub.ConsultaInfoInstrumentosRequest request = new ConsInstPortStub.ConsultaInfoInstrumentosRequest();
+	    request.setXmlEntrada(xml_string);
+	    
+	
+	
+	    ConsInstPortStub.ConsultaInfoInstrumentosResponse response = new ConsInstPortStub.ConsultaInfoInstrumentosResponse();
+	    try
+	    {
+	    	int iTimeout= 300000;
+	    	Options opt = stub._getServiceClient().getOptions();
+	    	 LOG.printMsg(EnumTypeMessage.ERROR, "ANTES : " +  String.valueOf(opt.getTimeOutInMilliSeconds()));
+	    	opt.setTimeOutInMilliSeconds(iTimeout);
+	    	 LOG.printMsg(EnumTypeMessage.ERROR, "Despues : " +  String.valueOf(opt.getTimeOutInMilliSeconds()));
+	    	opt.setProperty(HTTPConstants.SO_TIMEOUT, iTimeout);
+	    	opt.setProperty(HTTPConstants.CONNECTION_TIMEOUT, iTimeout);
+	    	stub._getServiceClient().setOptions(opt);
+	    	
+	    	
+	      response = stub.consultaInfoInstrumentosOp(request);
+	    } catch (RemoteException e) {
+	    	 LOG.printMsg(EnumTypeMessage.ERROR, e.getMessage());
+	    }
+	    
+	    response.getXmlRespuesta();
+	    
+	    return response.getXmlRespuesta();
+	  }
+	
+
+}
+-----------------------------------------------------------------------------------
+package com.afore.fmwk_webservice_getter;
+
+
+import com.afore.enums.EnumTypeMessage;
+import com.afore.fmwk_webservice_factory.FMWK_Factory_WebService;
+import com.afore.fmwk_webservice_interfaces.FMWK_Interfaces_WebService;
+import com.afore.log.UTIL_Log;
+import com.olf.openjvs.OConsole;
+import com.olf.openjvs.OException;
+
+public class FMWK_Getter_WebService {
+	
+	FMWK_Interfaces_WebService WebService;
+	
+	public void getDataWS(int Request) throws OException{
+		
+		try {
+			WebService = FMWK_Factory_WebService.getFactory().getFactory_WebService(Request);
+			WebService.importDataWS();
+		   } catch(OException e1){
+			   OConsole.oprint("\nMensaje de error:" + e1.getMessage() );
+		   } 
+		   finally{
+			   OConsole.oprint("\n Successfully executed Service: " + Request);
+		   }	
+	}
+
+	public void getDataWS(int Request, String Ticker) throws OException{
+		
+		try {
+			WebService = FMWK_Factory_WebService.getFactory().getFactory_WebService(Request,Ticker);
+			WebService.importDataWS();
+		   } catch(OException e1){
+			   OConsole.oprint("\nMensaje de error:" + e1.getMessage() );
+		   } 
+		   finally{
+			   OConsole.oprint("\n Successfully executed Service: " + Request);
+		   }	
+	}   	   	   
+	
+	public void getDataWS(int Request, UTIL_Log log) throws OException{
+		
+		try {
+			WebService = FMWK_Factory_WebService.getFactory().getFactory_WebService(Request, log);
+			WebService.importDataWS();
+		   } catch(OException e1){
+			   OConsole.oprint("\nMensaje de error:" + e1.getMessage() );
+		   } 
+		   finally{
+			   log.printMsg(EnumTypeMessage.INFO, "Successfully executed Service: " + Request);
+		   }	
+	} 
+
+	public void getDataWS(int Request, UTIL_Log log, int operacion) throws OException{
+		
+		try {
+			WebService = FMWK_Factory_WebService.getFactory().getFactory_WebService(Request, log, operacion);
+			WebService.importDataWS();
+		   } catch(OException e1){
+			   OConsole.oprint("\nMensaje de error:" + e1.getMessage() );
+		   } 
+		   finally{
+			   log.printMsg(EnumTypeMessage.INFO, "Successfully executed Service: " + Request);
+		   }	
+	} 
+}
+-------------------------------------------------------------------------------------
+
+package com.afore.fmwk_webservice_factory;
+
+
+import com.afore.fmwk_webservice_enums.EnumAforeWebService;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_Bursatilidad;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_CargaFixing;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_CreditRatings;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_Curvas;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_Fix_Rates;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_Gentec;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_InstrumentScenario;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_InstrumentScenarioStress;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_Nav;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_PrecioLimpio;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_PrecioSucio;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_ProbIncumplimiento;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_SeveridadPerdida;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_TasaRendimiento;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_TipoCambio;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_VectorConta;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_VectorConta_TE;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_VectorConta_Today_Instruments;
+import com.afore.fmwk_webservice_imp.FMWK_Implement_WebService_VoBo_Validacion;
+import com.afore.fmwk_webservice_interfaces.FMWK_Interfaces_WebService;
+import com.afore.log.UTIL_Log;
+import com.olf.openjvs.OException;
+import com.olf.openjvs.Util;
+
+public class FMWK_Factory_WebService {
+
+	private static FMWK_Factory_WebService factoryInstace = null;
+
+	
+	public static FMWK_Factory_WebService getFactory(){
+		if(factoryInstace== null)
+			factoryInstace = new FMWK_Factory_WebService();
+		return factoryInstace;
+	}
+	
+	public FMWK_Interfaces_WebService getFactory_WebService (int Request) throws OException {	
+		if (Request == EnumAforeWebService.MX_WS_BURSATILIDAD.value())
+			return new FMWK_Implement_WebService_Bursatilidad(Request);		
+		else if (Request == EnumAforeWebService.MX_WS_CURVAS.value())
+			return new FMWK_Implement_WebService_Curvas(Request);
+		else if (Request == EnumAforeWebService.MX_WS_PRECIOS.value())
+			return new FMWK_Implement_WebService_PrecioSucio(Request);
+		else if (Request == EnumAforeWebService.MX_WS_TIPO_CAMBIO.value())
+			return new FMWK_Implement_WebService_TipoCambio(Request);
+		else if (Request == EnumAforeWebService.MX_WS_GENTEC.value())
+			return new FMWK_Implement_WebService_Gentec(Request);
+		else if (Request == EnumAforeWebService.MX_WS_NAV.value()
+				|| Request == EnumAforeWebService.MX_WS_NAV_T1.value())
+			return new FMWK_Implement_WebService_Nav(Request);
+		else if (Request == EnumAforeWebService.MX_WS_PARTY_CREDIT_RATING.value())
+			return new FMWK_Implement_WebService_CreditRatings(Request);
+		else if (Request == EnumAforeWebService.MX_WS_TASA_RENDIMIENTO.value())
+			return new FMWK_Implement_WebService_TasaRendimiento(Request);
+		else if (Request == EnumAforeWebService.MX_WS_ESCENARIOS.value())
+			return new FMWK_Implement_WebService_InstrumentScenario(Request);
+		else if (Request == EnumAforeWebService.MX_WS_ESCENARIOS_FIJOS.value())
+			return new FMWK_Implement_WebService_InstrumentScenarioStress(Request);
+		else if (Request == EnumAforeWebService.MX_WS_PROB_INCUMPLIMIENTO.value())
+			return new FMWK_Implement_WebService_ProbIncumplimiento(Request);
+		else if (Request == EnumAforeWebService.MX_WS_SEVERIDAD_PERDIDA.value())
+			return new FMWK_Implement_WebService_SeveridadPerdida(Request);
+		else if (Request == EnumAforeWebService.MX_WS_LOAD_PRECIO_LIMPIO.value())
+			return new FMWK_Implement_WebService_PrecioLimpio(Request);
+		else if (Request == EnumAforeWebService.MX_WS_LOAD_PRICE_NEXT_DAY.value())
+			return new FMWK_Implement_WebService_PrecioSucio(Request);
+		else if (Request == EnumAforeWebService.MX_WS_LOAD_VECTOR_CONTA.value())
+			return new FMWK_Implement_WebService_VectorConta(Request);
+		else if (Request == EnumAforeWebService.MX_WS_LOAD_TE_VECTOR_CONTA.value())//PSA-29082019: Se agrega carga de vector TE de Contabilidad. 
+			return new FMWK_Implement_WebService_VectorConta_TE(Request);
+		//JVV-27112018: Caso de Borde, Se agregan instrumentos creados el mismo dia de proceso, y que NO se incluyeron en carga vector de T-1
+		else if (Request == EnumAforeWebService.MX_WS_LOAD_VECTOR_CONTA_TODAY_INS.value())
+			return new FMWK_Implement_WebService_VectorConta_Today_Instruments(Request);
+		//JVV-10012019: Para carga de FIX RATES
+		else if (Request == EnumAforeWebService.MX_WS_FIX_RATES.value())
+			return new FMWK_Implement_WebService_Fix_Rates(Request);
+		
+		else {
+			String sErrorMessage = 	"No se puede crear el Factory";		
+			Util.exitFail(sErrorMessage);
+		}
+		return null;	
+	}
+	
+	public FMWK_Interfaces_WebService getFactory_WebService (int Request, String Ticker) throws OException {	
+		if (Request == EnumAforeWebService.MX_WS_ESCENARIOS.value())
+			return new FMWK_Implement_WebService_InstrumentScenario(Request,Ticker);
+		else if (Request == EnumAforeWebService.MX_WS_ESCENARIOS_FIJOS.value())
+			return new FMWK_Implement_WebService_InstrumentScenarioStress(Request,Ticker);
+		else if (Request == EnumAforeWebService.MX_WS_PROB_INCUMPLIMIENTO.value())
+			return new FMWK_Implement_WebService_ProbIncumplimiento(Request,Ticker);
+		else if (Request == EnumAforeWebService.MX_WS_SEVERIDAD_PERDIDA.value())
+			return new FMWK_Implement_WebService_SeveridadPerdida(Request,Ticker);
+		else {
+			String sErrorMessage = 	"No se puede crear el Factory (" + Ticker + ")";		
+			Util.exitFail(sErrorMessage);
+		}
+		return null;	
+	}
+	
+	public FMWK_Interfaces_WebService getFactory_WebService (int Request, UTIL_Log log) throws OException {	
+		if (Request == EnumAforeWebService.MX_WS_NAV.value())
+			return new FMWK_Implement_WebService_Nav(Request,log);
+		else if (Request == EnumAforeWebService.MX_WS_FIXING.value()){
+			Request = EnumAforeWebService.MX_WS_PRECIOS.value();
+			return new FMWK_Implement_WebService_CargaFixing(EnumAforeWebService.MX_WS_PRECIOS.value(),log);
+		}else {
+			String sErrorMessage = 	"No se puede crear el Factory (" + log.getClass().getSimpleName() + ")";		
+			Util.exitFail(sErrorMessage);
+		}
+		return null;	
+	}
+	
+	public FMWK_Interfaces_WebService getFactory_WebService (int request,  UTIL_Log log, int operacion) throws OException {
+		if( request == EnumAforeWebService.MX_WS_EOFDAY.value() )
+			return new FMWK_Implement_WebService_VoBo_Validacion(request, log, operacion);
+		else {
+			String sErrorMessage = 	"No se puede crear el Factory (" + log.getClass().getSimpleName() + ")";		
+			Util.exitFail(sErrorMessage);
+		}
+		return null;
+	} 
+	
+}
+--------------------------------------------------------------------------------------------------------
+
+package com.afore.fmwk_webservice_imp;
+
+import java.nio.channels.UnresolvedAddressException;
+import java.rmi.RemoteException;
+
+import org.apache.axis2.AxisFault;
+import org.apache.axis2.client.Options;
+import org.apache.axis2.transport.http.HTTPConstants;
+
+import mx.com.findur_valmer.www.consultainfoinstrumentos.consinstport.ConsInstPortStub;
+
+import com.afore.enums.EnumTypeMessage;
+import com.afore.enums.EnumsInstrumentsMX;
+import com.afore.enums.EnumsTranInfoFields;
+import com.afore.fmwk_webservice_abstract.FMWK_Abstract_WebService;
+import com.olf.openjvs.DBUserTable;
+import com.olf.openjvs.DBaseTable;
+import com.olf.openjvs.Instrument;
+import com.olf.openjvs.OException;
+import com.olf.openjvs.Str;
+import com.olf.openjvs.Table;
+import com.olf.openjvs.Transaction;
+import com.olf.openjvs.Util;
+import com.olf.openjvs.XString;
+import com.olf.openjvs.enums.COL_TYPE_ENUM;
+import com.olf.openjvs.enums.OLF_RETURN_CODE;
+import com.olf.openjvs.enums.SEARCH_ENUM;
+import com.olf.openjvs.enums.TRAN_STATUS_ENUM;
+import com.olf.openjvs.enums.TRAN_TYPE_ENUM;
+
+public class FMWK_Implement_WebService_Bursatilidad extends
+		FMWK_Abstract_WebService {
+
+	private static final String USER_NIVELBURSATILIDAD = "user_nivelbursatilidad";
+	private static final String PROCESO = "Imp_ValmerScene";
+	private static final String BURSATILIDADNULA = "NULA";
+	private static final String STATUS_INSTRUMENT = "0";
+	private static final String CABECERAXML = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
+
+	public FMWK_Implement_WebService_Bursatilidad(int Request)
+			throws OException {
+		super(Request);
+		// TODO Auto-generated constructor stub
+	}
+
+	@Override
+	public void importDataWS() {
+		try {
+			// URL Endpoint
+			String sUrl = UTILGLOBAL.getVariableGlobal(SISTEMA_CONF_VAR,PROCESO, "wsdl");
+
+			LOG.printMsg(EnumTypeMessage.INFO, "URL: " + sUrl);
+
+			// Get XML request
+			String sXML = this.getXMLRequest();
+
+			LOG.printMsg(EnumTypeMessage.INFO, "Request: " + sXML);
+/*
+			CallWS ws = new CallWS(sUrl, sXML);
+			String sResponse = ws.call(sUrl, sXML);
+			*/
+			String sResponse = call_new(sUrl, sXML);
+			
+
+			LOG.printMsg(EnumTypeMessage.INFO, "Response: " + sResponse);
+			
+			if (sResponse !=null){
+				// XML to Table
+				XString xstring = Str.xstringNew();
+				Table tblXML = Table.xmlStringToTable(CABECERAXML+sResponse);
+	
+				String error_msg = Str.xstringGetString(xstring);
+	
+				if (Str.iEqual(error_msg, "") == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.toInt()) {
+	
+					LOG.printMsg(EnumTypeMessage.INFO, "Successful XML To Table");
+					int retval = tblXML.condenseTable();
+
+					if (retval == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.toInt()) {
+						LOG.printMsg(EnumTypeMessage.INFO,"Condensing XML table successful");
+//						tblXML.viewTable();
+						// Load data in tran info field from valmer web service
+						this.doLoadInstrumentBursatility(tblXML);				
+	
+					} else {
+						LOG.printMsg(EnumTypeMessage.ERROR,"Not able to condense xml table");
+					}
+				} else {
+					LOG.printMsg(EnumTypeMessage.ERROR,"Not able to convert xml to table");
+					LOG.printMsg(EnumTypeMessage.ERROR, "Error: " + error_msg);
+				}
+				tblXML.destroy();
+			}else{
+				LOG.printMsg(EnumTypeMessage.ERROR, "Not response from webservice");			
+			}
+			//Load data in tran info field from risk class
+			//this.doLoadInstrumentBursatilityRiskClass();
+			
+		} catch (UnresolvedAddressException uae) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "UnresolvedAddressException:"+ uae.getMessage());
+			Util.exitFail();
+		} catch (NullPointerException npe) {
+			LOG.printMsg(EnumTypeMessage.ERROR,"NullPointerException:" + npe.getMessage());
+			Util.exitFail();
+		} catch (OException o) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "OException: " + o.getMessage());
+			Util.exitFail();
+		} catch (Exception e) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "Exception:" + e.getMessage());
+			Util.exitFail();
+		} finally {
+			
+			LOG.markEndScript();
+		}
+	}
+
+	@Override
+	public String getXMLRequest() throws OException {
+		Table tIns = new Table();
+		String sQuery = "\n SELECT ins.ins_num, ins.ticker FROM "
+				+ "\n ab_tran abtran, " 
+				+ "\n header ins "
+				+ "\n WHERE tran_type="+ TRAN_TYPE_ENUM.TRAN_TYPE_HOLDING.toInt()
+				+ "\n AND abtran.ins_num=ins.ins_num "
+				//+ "\n AND abtran.ins_type <> " + EnumsInstrumentsMX.MX_EQTINT.toInt()
+				+ "\n AND abtran.tran_status="+ TRAN_STATUS_ENUM.TRAN_STATUS_VALIDATED.toInt()
+				+ "\n AND ins.ticker is not null "
+				+ "\n and ins.ins_type != " + EnumsInstrumentsMX.MX_EQTINT.toInt();
+
+		DBaseTable.execISql(tIns, sQuery);
+		String sTicker = "",sInstrumento = "",sXML = "";
+
+		sXML = sXML + "\n <consulta><tipoConsulta>" + REQUESTTYPE+ "</tipoConsulta>";
+		
+		for (int iRow = 1; iRow <= tIns.getNumRows(); iRow++) {
+			sTicker = tIns.getString("ticker", iRow);
+
+			if (!sTicker.equals("") && sTicker != null) {
+					sInstrumento= "\n <instrumento> "+ 								 
+							"\n <ticker>"+sTicker+"</ticker> "+ 
+							"\n </instrumento> "; 
+
+					sXML = sXML + sInstrumento;			
+			}
+		}
+
+		sXML = sXML + "\n </consulta>";
+		return sXML;
+	}
+
+	private void doLoadInstrumentBursatility(Table tblXml) throws OException {
+		try {
+			// Validate XML
+			Table tResp = tblXml.getTable("ws_resp", 1);
+			if (Table.isTableValid(tResp) == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.jvsValue()) {
+				int iRes = tResp.getInt("status", 1);
+				if (iRes == 1) {
+					String errMsg = tResp.getString("descripcion", 1);
+					LOG.printMsg(EnumTypeMessage.ERROR, errMsg);
+					Util.exitFail();
+				} else {
+					// Getting data from XML
+					Table tBurValmer = tblXml.getTable("bursatilidades", 1);
+					
+					Table tTranNumTicker = UTILGLOBAL.getTranNumToTicker(LOG);
+					
+					tBurValmer.select(tTranNumTicker, "tran_num", "ticker EQ $ticker");
+					
+					Table tBursatilidad = getBursatilidad();
+					
+					tBurValmer.select(tBursatilidad, "nivel_bursatilidad", "id_ws EQ $bursatilidad");
+					
+//					this.getExtraInstrumentInfo(tBurValmer);
+
+					for (int iRow = 1; iRow <= tBurValmer.getNumRows(); iRow++) {
+						
+						if (tBurValmer.getString("estatusInstumento",iRow).equalsIgnoreCase(STATUS_INSTRUMENT)){
+							
+							Table tTranInfo = Table.tableNew("tblTranInfo");
+	
+//							int iInsNum = tBurValmer.getInt("instrument_ins_num", iRow);
+							int iTranNum = tBurValmer.getInt("tran_num", iRow);
+	
+//							if(iTranNum == 63616){
+////								tBurValmer.viewTable();
+//							}
+							// Getting Instrument Number
+//							Instrument ins = Instrument.retrieve(iInsNum);
+	
+							// Getting Tran Info
+//							Transaction tran = Transaction.getTranFromIns(ins);
+							Transaction tran = Transaction.retrieve(iTranNum);
+							tTranInfo = tran.getTranInfo();
+	
+							tTranInfo.group("Type");
+							int iFirs_row = tTranInfo.findString("Type",EnumsTranInfoFields.MX_ALL_INS_BURSATILIDAD.toString(),SEARCH_ENUM.FIRST_IN_GROUP);
+
+							// Saving new value 
+//							String sBursatilidad = this.getBursatilityById(tBurValmer.getInt("bursatilidad", iRow)+1);
+							String sBursatilidad = tBurValmer.getString("nivel_bursatilidad", iRow);
+							
+							tTranInfo.setString("Value", iFirs_row, sBursatilidad);
+							int iRetval = tran.saveTranInfo();
+							
+							if (iRetval == 0) {
+								LOG.printMsg(EnumTypeMessage.ERROR," El Ins Info "+ EnumsTranInfoFields.MX_ALL_INS_BURSATILIDAD.toString()+ "no pudo ser guardado para el instumento "+tBurValmer.getString("ticker",iRow)+".");
+							}
+							tTranInfo.destroy();
+						}else{						
+							LOG.printMsg(EnumTypeMessage.INFO, tBurValmer.getString("descripcionInstrumento",iRow)+" para el instrumento: "+tBurValmer.getString("ticker",iRow)+".");
+						}
+					}
+					tBurValmer.destroy();
+				}
+			}
+		} catch (OException e) {
+			LOG.printMsg(EnumTypeMessage.ERROR, e.getMessage());
+		}
+	}
+
+	private Table getBursatilidad() throws OException {
+		Table tNivelBursatilidad = Table.tableNew();
+		tNivelBursatilidad.setTableName(USER_NIVELBURSATILIDAD);
+		DBUserTable.load(tNivelBursatilidad);
+		return tNivelBursatilidad;
+	}
+
+	/**
+	 * This method add the ins_num to response table
+	 * 
+	 * @return void
+	 * @throws OException
+	 * */
+	private void getExtraInstrumentInfo(Table tInsValmer) throws OException {
+		tInsValmer.addCol("instrument_ins_num", COL_TYPE_ENUM.COL_INT);
+		/*
+		 * Get the instrument numbers of the templates and fill into the import
+		 * table.
+		 */
+		for (int iRow = 1; iRow <= tInsValmer.getNumRows(); iRow++) {
+
+			Table tSql = Table.tableNew();
+			//String sTicker = tInsValmer.getString("tipo_valor", iRow) + "_"+ tInsValmer.getString("emisor", iRow) + "_"+ tInsValmer.getString("serie", iRow);
+			String sTicker = tInsValmer.getString("ticker", iRow);
+			
+			LOG.printMsg(EnumTypeMessage.INFO,"Getting ins_num and market_px for instrument with reference: "+ sTicker);
+			
+			String sSql = "SELECT  ab.ins_num " + " FROM ab_tran  ab"
+					+ " WHERE  ab.reference like '%" + sTicker + "%'"
+					+ " AND ab.tran_status = "+ TRAN_STATUS_ENUM.TRAN_STATUS_VALIDATED.toInt()
+					+ " AND ab.tran_type = "+ TRAN_TYPE_ENUM.TRAN_TYPE_HOLDING.toInt();
+
+			DBaseTable.execISql(tSql, sSql);
+			if (tSql.getNumRows() == 1) {
+				int instrument_ins_num = tSql.getInt(1, 1);
+				tInsValmer.setInt("instrument_ins_num", iRow,instrument_ins_num);
+
+				LOG.printMsg(EnumTypeMessage.INFO,"ins_num for instrument with reference: " + sTicker+ " is " + instrument_ins_num);
+
+			} else {
+				LOG.printMsg(EnumTypeMessage.INFO,"INFO: ins_num for instrument with reference: "+ sTicker + " not found.");
+			}
+			tSql.destroy();
+		}
+	}
+	
+	public void doLoadInstrumentBursatilityRiskClass() throws OException {
+		Table tIns = new Table();
+		
+		String sQuery = "\n SELECT ins.ins_num, ins.ticker FROM "
+				+ "\n ab_tran abtran, " 
+				+ "\n header ins "
+				+ "\n WHERE tran_type="+ TRAN_TYPE_ENUM.TRAN_TYPE_HOLDING.toInt()
+				+ "\n AND abtran.ins_num=ins.ins_num "
+				+ "\n AND abtran.tran_status="+ TRAN_STATUS_ENUM.TRAN_STATUS_VALIDATED.toInt()
+				+ "\n AND abtran.ins_type <> " + EnumsInstrumentsMX.MX_EQTINT.toInt() 
+				+ "\n AND ins.ticker is not null ";
+				//+ "\n AND ROWNUM<5 ";
+
+		DBaseTable.execISql(tIns, sQuery);
+
+		for (int iRow = 1; iRow <= tIns.getNumRows(); iRow++) {
+			
+			Table tTranInfo = Table.tableNew("tblTranInfo");
+			int iInsNum = tIns.getInt("ins_num", iRow);
+
+			// Getting Instrument Number
+			Instrument ins = Instrument.retrieve(iInsNum);
+			
+			// Getting Tran Info
+			Transaction tran = Transaction.getTranFromIns(ins);
+			tTranInfo = tran.getTranInfo();
+			LOG.printMsg(EnumTypeMessage.INFO,"----DEBUG----");
+			tTranInfo.group("Type");
+			int iFirs_row = tTranInfo.findString("Type",EnumsTranInfoFields.MX_ALL_INS_BURSATILIDAD.toString(),SEARCH_ENUM.FIRST_IN_GROUP);
+			String sBursatility = tTranInfo.getString("Value", iFirs_row);
+			LOG.printMsg(EnumTypeMessage.INFO,"Bursatility: "+sBursatility);
+			if ((sBursatility == null) || (sBursatility.isEmpty()) ) {
+				LOG.printMsg(EnumTypeMessage.INFO,"Adding bursatility to the instrument with ins number is: " + iInsNum);
+
+				iFirs_row = tTranInfo.findString("Type", "FITCH_GLOB_LP",SEARCH_ENUM.FIRST_IN_GROUP);
+				String sFitch_Glob_LP = tTranInfo.getString("Value", iFirs_row);
+				LOG.printMsg(EnumTypeMessage.INFO,"FITCH_GLOB_LP: "+sFitch_Glob_LP);
+				iFirs_row = tTranInfo.findString("Type", "HRRATINGS_GLOB_LP",SEARCH_ENUM.FIRST_IN_GROUP);
+				String sHratings_Glob_LP = tTranInfo.getString("Value",iFirs_row);
+				LOG.printMsg(EnumTypeMessage.INFO,"HRRATINGS_GLOB_LP: "+sHratings_Glob_LP);
+				iFirs_row = tTranInfo.findString("Type", "MOODYS_GLOB_LP",SEARCH_ENUM.FIRST_IN_GROUP);
+				String sMoodys_Glob_LP = tTranInfo.getString("Value", iFirs_row);
+				LOG.printMsg(EnumTypeMessage.INFO,"MOODYS_GLOB_LP: "+sMoodys_Glob_LP);
+				iFirs_row = tTranInfo.findString("Type", "S&P_GLOB_LP",SEARCH_ENUM.FIRST_IN_GROUP);
+				String sSP_Glob_LP = tTranInfo.getString("Value", iFirs_row);
+				LOG.printMsg(EnumTypeMessage.INFO,"S&P_GLOB_LP: "+sSP_Glob_LP);
+				iFirs_row = tTranInfo.findString("Type", "FITCH_LOC_LP",SEARCH_ENUM.FIRST_IN_GROUP);
+				String sFitch_Loc_LP = tTranInfo.getString("Value", iFirs_row);
+				LOG.printMsg(EnumTypeMessage.INFO,"FITCH_LOC_LP: "+sFitch_Loc_LP);
+				iFirs_row = tTranInfo.findString("Type", "HRRATINGS_LOC_LP",SEARCH_ENUM.FIRST_IN_GROUP);
+				String sHratings_Loc_LP = tTranInfo.getString("Value",iFirs_row);
+				LOG.printMsg(EnumTypeMessage.INFO,"HRRATINGS_LOC_LP: "+sHratings_Loc_LP);
+				iFirs_row = tTranInfo.findString("Type", "MOODYS_LOC_LP",SEARCH_ENUM.FIRST_IN_GROUP);
+				String sMoodys_Loc_LP = tTranInfo.getString("Value", iFirs_row);
+				LOG.printMsg(EnumTypeMessage.INFO,"MOODYS_LOC_LP: "+sMoodys_Loc_LP);
+				iFirs_row = tTranInfo.findString("Type", "S&P_LOC_LP",SEARCH_ENUM.FIRST_IN_GROUP);
+				String sSP_Loc_LP = tTranInfo.getString("Value", iFirs_row);
+				LOG.printMsg(EnumTypeMessage.INFO,"S&P_LOC_LP: "+sSP_Loc_LP);
+				
+				LOG.printMsg(EnumTypeMessage.INFO,"CONCATENACION: "+sFitch_Glob_LP + sHratings_Glob_LP + sMoodys_Glob_LP.toUpperCase() + sSP_Glob_LP + sFitch_Loc_LP + sHratings_Loc_LP + sMoodys_Loc_LP.toUpperCase() + sSP_Loc_LP);
+				sBursatility = this.calculateBursatility(sFitch_Glob_LP + sHratings_Glob_LP + sMoodys_Glob_LP.toUpperCase() + sSP_Glob_LP + sFitch_Loc_LP + sHratings_Loc_LP + sMoodys_Loc_LP.toUpperCase() + sSP_Loc_LP);
+				
+				LOG.printMsg(EnumTypeMessage.INFO,"Bursatilidad Calculada: "+sBursatility);
+				iFirs_row = tTranInfo.findString("Type",EnumsTranInfoFields.MX_ALL_INS_BURSATILIDAD.toString(),SEARCH_ENUM.FIRST_IN_GROUP);
+				tTranInfo.setString("Value", iFirs_row, sBursatility);
+				int iRetval = tran.saveTranInfo();
+
+				if (iRetval == 0) {
+					LOG.printMsg(EnumTypeMessage.ERROR," El Ins Info "+ EnumsTranInfoFields.MX_ALL_INS_BURSATILIDAD.toString()+ "no pudo ser guardado.");
+				}
+			}
+			tTranInfo.destroy();
+		}
+		tIns.destroy();
+	}
+
+	public String calculateBursatility(String sRiskClass) throws OException {
+		String sBursatility = "";
+		Table tNivelBursatilidad = Table.tableNew();
+		tNivelBursatilidad.setTableName(USER_NIVELBURSATILIDAD);
+		DBUserTable.load(tNivelBursatilidad);
+
+		if (sRiskClass.indexOf("AAA") != -1) {
+			for (int iRow = 1; iRow <= tNivelBursatilidad.getNumRows(); iRow++) {
+				if (tNivelBursatilidad.getString("clasificacion_riesgo_ins",iRow).indexOf("AAA") != -1) {
+					sBursatility = tNivelBursatilidad.getString("nivel_bursatilidad", iRow);
+				}
+			}
+		} else if (sRiskClass.indexOf("AA") != -1) {
+			for (int iRow = 1; iRow <= tNivelBursatilidad.getNumRows(); iRow++) {
+				if (tNivelBursatilidad.getString("clasificacion_riesgo_ins",iRow).indexOf("AA") != -1) {
+					sBursatility = tNivelBursatilidad.getString("nivel_bursatilidad", iRow);
+				}
+			}
+		} else if (sRiskClass.indexOf("A") != -1) {
+			for (int iRow = 1; iRow <= tNivelBursatilidad.getNumRows(); iRow++) {
+				if (tNivelBursatilidad.getString("clasificacion_riesgo_ins",iRow).indexOf("A") != -1) {
+					sBursatility = tNivelBursatilidad.getString("nivel_bursatilidad", iRow);
+				}
+			}
+		} else if (sRiskClass.indexOf("BBB") != -1) {
+			for (int iRow = 1; iRow <= tNivelBursatilidad.getNumRows(); iRow++) {
+				if (tNivelBursatilidad.getString("clasificacion_riesgo_ins",iRow).indexOf("BBB") != -1) {
+					sBursatility = tNivelBursatilidad.getString("nivel_bursatilidad", iRow);
+				}
+			}
+		} else {
+			sBursatility = BURSATILIDADNULA;
+		}
+		tNivelBursatilidad.destroy();
+		return sBursatility;
+	}
+	
+	public String getBursatilityById(int iClasificacion) throws OException{
+		String sBursatility = "";
+		Table tNivelBursatilidad = Table.tableNew();
+		tNivelBursatilidad.setTableName(USER_NIVELBURSATILIDAD);
+		DBUserTable.load(tNivelBursatilidad);
+		for (int iRow = 1; iRow <= tNivelBursatilidad.getNumRows(); iRow++) {
+			if (tNivelBursatilidad.getInt("id",iRow) == iClasificacion){
+				sBursatility = tNivelBursatilidad.getString("nivel_bursatilidad", iRow);
+			}	
+		}
+		tNivelBursatilidad.destroy();
+		return sBursatility;	
+	}
+	
+	
+	
+
+	 public String call_new(String sHost, String xml_string) {
+	     ConsInstPortStub stub = null;
+	    try
+	    {
+			stub = new ConsInstPortStub(sHost);
+		}
+	     catch (AxisFault e) {
+	    	 LOG.printMsg(EnumTypeMessage.ERROR, e.getMessage());
+	    }
+	    
+	
+	
+	    ConsInstPortStub.ConsultaInfoInstrumentosRequest request = new ConsInstPortStub.ConsultaInfoInstrumentosRequest();
+	    request.setXmlEntrada(xml_string);
+	    
+	
+	
+	    ConsInstPortStub.ConsultaInfoInstrumentosResponse response = new ConsInstPortStub.ConsultaInfoInstrumentosResponse();
+	    try
+	    {
+	    	int iTimeout= 300000;
+	    	Options opt = stub._getServiceClient().getOptions();
+	    	 LOG.printMsg(EnumTypeMessage.ERROR, "ANTES : " +  String.valueOf(opt.getTimeOutInMilliSeconds()));
+	    	opt.setTimeOutInMilliSeconds(iTimeout);
+	    	 LOG.printMsg(EnumTypeMessage.ERROR, "Despues : " +  String.valueOf(opt.getTimeOutInMilliSeconds()));
+	    	opt.setProperty(HTTPConstants.SO_TIMEOUT, iTimeout);
+	    	opt.setProperty(HTTPConstants.CONNECTION_TIMEOUT, iTimeout);
+	    	stub._getServiceClient().setOptions(opt);
+	    	
+	    	
+	      response = stub.consultaInfoInstrumentosOp(request);
+	    } catch (RemoteException e) {
+	    	 LOG.printMsg(EnumTypeMessage.ERROR, e.getMessage());
+	    }
+	    
+	    response.getXmlRespuesta();
+	    
+	    return response.getXmlRespuesta();
+	  }
+	
+
+}
+-------------------------------------------------------------------------------------------------
+
+package com.afore.fmwk_webservice_imp;
+
+import java.nio.channels.UnresolvedAddressException;
+
+import mx.com.findur_valmer.main.CallWS;
+
+import com.afore.enums.EnumTypeMessage;
+import com.afore.fmwk_webservice_abstract.FMWK_Abstract_WebService;
+import com.afore.log.UTIL_Log;
+import com.olf.openjvs.DBaseTable;
+import com.olf.openjvs.Index;
+import com.olf.openjvs.OCalendar;
+import com.olf.openjvs.OException;
+import com.olf.openjvs.Str;
+import com.olf.openjvs.Table;
+import com.olf.openjvs.Util;
+import com.olf.openjvs.XString;
+import com.olf.openjvs.enums.BMO_ENUMERATION;
+import com.olf.openjvs.enums.OLF_RETURN_CODE;
+import com.olf.openjvs.enums.SEARCH_CASE_ENUM;
+import com.olf.openjvs.enums.SEARCH_ENUM;
+
+public class FMWK_Implement_WebService_CargaFixing extends FMWK_Abstract_WebService{
+	
+	private static final String PROCESO = "Imp_ValmerScene";
+	private static final String STATUS_INSTRUMENT = "0";
+	private static final String CABECERAXML = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
+	private static final int _SAVE_UNIVERSAL = 1;
+	private static final int _SAVE_CLOSE     = 1;
+	
+	public FMWK_Implement_WebService_CargaFixing(int Request)
+			throws OException {
+		super(Request);
+		// TODO Auto-generated constructor stub
+	}
+	
+	public FMWK_Implement_WebService_CargaFixing(int Request, UTIL_Log log) throws OException {
+		super(Request, log);
+	}
+
+	@Override
+	public void importDataWS() {
+		try {
+			// URL Endpoint
+			String sUrl = UTILGLOBAL.getVariableGlobal(SISTEMA_CONF_VAR,PROCESO, "wsdl");
+
+			LOG.printMsg(EnumTypeMessage.INFO, "URL: " + sUrl);
+			
+			//Load user table
+//			Table tIndex = new Table();
+//			Table tIndexCopy = new Table();	
+//			tIndex.setTableName(USER_CURVAS);
+//			DBUserTable.load(tIndex);
+//			tIndexCopy.select(tIndex,"*","web_service EQ "+EnumAforeWebService.MX_WS_PRECIOS.value());
+			Table tIndex = getIndex();
+			
+			// Get XML request
+			String sXML = this.getXMLRequest(tIndex);
+			Str.printToFile("C:\\PRECIOSCURVASWS2_XML.xml", sXML);
+			LOG.printMsg(EnumTypeMessage.INFO, "Request: " + sXML);
+
+			CallWS ws = new CallWS(sUrl, sXML);
+			String sResponse = ws.call(sUrl, sXML);
+
+			LOG.printMsg(EnumTypeMessage.INFO, "Response: " + sResponse);
+			
+			if (sResponse !=null){
+				// XML to Table
+				XString xstring = Str.xstringNew();
+				Table tblXML = Table.xmlStringToTable(CABECERAXML+sResponse);
+	
+				String error_msg = Str.xstringGetString(xstring);
+	
+				if (Str.iEqual(error_msg, "") == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.toInt()) {
+	
+					LOG.printMsg(EnumTypeMessage.INFO, "Successful XML To Table");
+					int retval = tblXML.condenseTable();
+
+					if (retval == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.toInt()) {
+						LOG.printMsg(EnumTypeMessage.INFO,"Condensing XML table successful");
+//						tblXML.viewTable();
+						// Load data from valmer web service
+						this.doLoadInstrumentPrice(tblXML,tIndex);				
+	
+					} else {
+						LOG.printMsg(EnumTypeMessage.ERROR,"Not able to condense xml table");
+					}
+				} else {
+					LOG.printMsg(EnumTypeMessage.ERROR,"Not able to convert xml to table");
+					LOG.printMsg(EnumTypeMessage.ERROR, "Error: " + error_msg);
+				}
+				tblXML.destroy();
+			}else{
+				LOG.printMsg(EnumTypeMessage.ERROR, "Not response from webservice");			
+			}
+			tIndex.destroy();
+		} catch (UnresolvedAddressException uae) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "UnresolvedAddressException:"+ uae.getMessage());
+			Util.exitFail();
+		} catch (NullPointerException npe) {
+			LOG.printMsg(EnumTypeMessage.ERROR,"NullPointerException:" + npe.getMessage());
+			Util.exitFail();
+		} catch (OException o) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "OException: " + o.getMessage());
+			Util.exitFail();
+		} catch (Exception e) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "Exception:" + e.getMessage());
+			Util.exitFail();
+		} 
+	}
+
+
+	public String getXMLRequest(Table tIndex) throws OException {
+	
+		int iToday = OCalendar.today();
+		String sTicker = "", sInstrumento = "", sMes = "", sDia = "", sXML = "";
+
+		if (OCalendar.getMonth(iToday) < 10) {
+			sMes = "0" + String.valueOf(OCalendar.getMonth(iToday));
+		} else
+			sMes = String.valueOf(OCalendar.getMonth(iToday));
+		if (OCalendar.getDay(iToday) < 10) {
+			sDia = "0" + String.valueOf(OCalendar.getDay(iToday));
+		} else
+			sDia = String.valueOf(OCalendar.getDay(iToday));
+
+		String sToday = String.valueOf(OCalendar.getYear(iToday)) + sMes + sDia;
+		LOG.printMsg(EnumTypeMessage.INFO, sToday);
+
+		sXML = sXML + "\n <consulta><tipoConsulta>" + REQUESTTYPE + "</tipoConsulta>";
+
+		
+		for (int iRow = 1; iRow <= tIndex.getNumRows(); iRow++) {
+			sTicker = tIndex.getString("ticker", iRow);
+
+			if (!sTicker.equals("") && sTicker != null) {
+					sInstrumento= "\n <instrumento> "+ 	
+							"\n <fecha>"+sToday+"</fecha> "+
+							"\n <ticker>"+sTicker+"</ticker> "+ 
+							"\n </instrumento> "; 
+
+					sXML = sXML + sInstrumento;				
+			}
+		}
+
+		sXML = sXML + "\n </consulta>";
+		return sXML;
+	}
+	
+	private void doLoadInstrumentPrice(Table tblXml, Table tIndex) throws OException {
+		try {
+			String sTicker = "", sIndexName = "", sGridName = "";
+//			double dbase = 1;
+			// Validate XML
+			Table tResp = tblXml.getTable("ws_resp", 1);
+			if (Table.isTableValid(tResp) == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.jvsValue()) {
+				int iRes = tResp.getInt("status", 1);
+				if (iRes == 1) {
+					String errMsg = tResp.getString("descripcion", 1);
+					LOG.printMsg(EnumTypeMessage.ERROR, errMsg);
+					Util.exitFail();
+				} else {
+					// Getting data from XML
+					Table tInsValmer = tblXml.getTable("instrumentos", 1);
+					
+					for (int iRow = 1; iRow <= tInsValmer.getNumRows(); iRow++) {
+						
+						if (tInsValmer.getString("estatusInstumento",iRow).equalsIgnoreCase(STATUS_INSTRUMENT)){
+	
+							Table tGpts = Table.tableNew("All Gpt");
+							
+							//Getting Market Data	
+							sTicker = tInsValmer.getString("ticker", iRow);
+							double dirty_price 	= Str.strToDouble(tInsValmer.getString("precio_sucio", iRow));
+							
+							//Getting data from user table
+							int iRowFind = tIndex.unsortedFindString("ticker", sTicker, SEARCH_CASE_ENUM.CASE_INSENSITIVE);
+							
+							if(iRowFind > 0){
+								sIndexName = tIndex.getString("curva", iRowFind);
+								sGridName  = tIndex.getString("grid_point", iRowFind);
+							}
+							
+							
+							// Load current grid points and reset values on first grid point
+					        tGpts = Index.loadAllGpts(sIndexName);
+					        
+					        tGpts.sortCol("name");
+					        int iPos = tGpts.findString("name", sGridName,SEARCH_ENUM.FIRST_IN_GROUP);
+
+					        //Set new value Yield
+//					        tGpts.setDouble("input.mid", iPos, dirty_price/dbase);
+					        tGpts.setDouble("input.mid", iPos, dirty_price);
+
+					        int iRet = Index.updateGpts(tGpts, BMO_ENUMERATION.BMO_MID,_SAVE_UNIVERSAL, _SAVE_CLOSE, OCalendar.today());	        
+
+					        if(iRet == 0){
+								LOG.printMsg(EnumTypeMessage.ERROR, " No pudo ser cargado el GridPoint "+sGridName+ " de la curva "+sIndexName);			
+					        }else{
+								LOG.printMsg(EnumTypeMessage.INFO, " Se cargo correctamente el GridPoint "+sGridName+ " de la curva "+sIndexName);
+					        }
+					        //Cleanup memory
+					        tGpts.destroy();
+						}else{						
+							LOG.printMsg(EnumTypeMessage.INFO, tInsValmer.getString("descripcionInstrumento",iRow)+" para el instrumento: "+tInsValmer.getString("tipo_valor",iRow)+"_"+tInsValmer.getString("emisor",iRow)+"_"+tInsValmer.getString("serie",iRow));
+						}
+					}
+					tInsValmer.destroy();
+				}
+			}
+		} catch (OException e) {
+			LOG.printMsg(EnumTypeMessage.ERROR, e.getMessage());
+		}
+	}
+	
+	private Table getIndex() throws OException {
+		
+		int iRet;
+		
+		StringBuilder sbQuery = null;
+		
+		Table tIndex = Util.NULL_TABLE;
+		
+		try{
+			sbQuery = new StringBuilder();
+			
+			sbQuery.append("select * \n")
+			       .append("from user_mx_index_valmer \n")
+			       .append("where web_service = ").append(REQUESTTYPE).append("\n")
+			       .append("  and curva like 'RESET%'");
+			
+			tIndex = Table.tableNew("user_mx_index_valmer ");
+			
+			iRet = DBaseTable.execISql(tIndex, sbQuery.toString());
+			
+			if(iRet == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.toInt())
+				return tIndex;
+			
+			else{
+				LOG.printMsg(EnumTypeMessage.ERROR, "No se pudo obtener informacion de la user table user_mx_index_valmer para las curvas RESET");
+				Util.exitFail("No se pudo obtener informacion de la user table user_mx_index_valmer para las curvas RESET");
+			}
+				
+				
+		}catch (OException e){
+			LOG.printMsg(EnumTypeMessage.ERROR, "No se pudo obtener informacion de la user table user_mx_index_valmer para las curvas RESET");
+			LOG.printMsg(EnumTypeMessage.ERROR, "OException: " + e.getMessage());
+			Util.exitFail("No se pudo obtener informacion de la user table user_mx_index_valmer para las curvas RESET");
+		}
+		return tIndex;
+	}
+
+}
+-------------------------------------------------------------------------------------------------------------
+package com.afore.fmwk_webservice_imp;
+
+import java.nio.channels.UnresolvedAddressException;
+
+import mx.com.findur_valmer.main.CallWS;
+
+import com.afore.enums.EnumTypeMessage;
+import com.afore.enums.EnumsCreditRatingSourcesMX;
+import com.afore.fmwk_webservice_abstract.FMWK_Abstract_WebService;
+import com.afore.party.Party;
+import com.olf.openjvs.DBaseTable;
+import com.olf.openjvs.OCalendar;
+import com.olf.openjvs.OException;
+import com.olf.openjvs.Ref;
+import com.olf.openjvs.Str;
+import com.olf.openjvs.Table;
+import com.olf.openjvs.Util;
+import com.olf.openjvs.XString;
+import com.olf.openjvs.enums.COL_TYPE_ENUM;
+import com.olf.openjvs.enums.DATE_FORMAT;
+import com.olf.openjvs.enums.OLF_RETURN_CODE;
+import com.olf.openjvs.enums.SEARCH_CASE_ENUM;
+import com.olf.openjvs.enums.SHM_USR_TABLES_ENUM;
+import com.olf.openjvs.fnd.RefBase;
+
+public class FMWK_Implement_WebService_CreditRatings extends
+		FMWK_Abstract_WebService {
+
+	/**************************************
+	 * Nombres de Columnas tabla webservice
+	 **************************************/
+	
+	private static final String COL_HEADER_FITCH_NAC_LP = "fitchnacionallp";
+	private static final String COL_HEADER_FITCH_NAC_CP = "fitchnacionalcp";
+	private static final String COL_HEADER_FITCH_GLO_LP = "fitchgloballp";
+	private static final String COL_HEADER_FITCH_GLO_CP = "fitchglobalcp";
+
+	private static final String COL_HEADER_SP_NAC_LP = "spnacionallp";
+	private static final String COL_HEADER_SP_NAC_CP = "spnacionalcp";
+	private static final String COL_HEADER_SP_GLO_LP = "spgloballp";
+	private static final String COL_HEADER_SP_GLO_CP = "spglobalcp";
+	
+
+	private static final String COL_HEADER_MOODYS_NAC_LP = "moodysnacionallp";
+	private static final String COL_HEADER_MOODYS_NAC_CP = "moodysnacionalcp";
+	private static final String COL_HEADER_MOODYS_GLO_LP = "moodysgloballp";
+	private static final String COL_HEADER_MOODYS_GLO_CP = "moodysglobalcp";
+	
+	private static final String COL_HEADER_HR_NAC_LP = "hrnacionallp";
+	private static final String COL_HEADER_HR_NAC_CP = "hrnacionalcp";
+	private static final String COL_HEADER_HR_GLO_LP = "hrgloballp";
+	private static final String COL_HEADER_HR_GLO_CP = "hrglobalcp";
+	
+	private static final String COL_HEADER_VERUM_NAC_LP = "verumnacionallp";
+	private static final String COL_HEADER_VERUM_NAC_CP = "verumnacionalcp";
+	private static final String COL_HEADER_VERUM_GLO_LP = "verumgloballp";
+	private static final String COL_HEADER_VERUM_GLO_CP = "verumglobalcp";
+	
+	private static final String PROCESO = "Imp_ValmerScene";
+	private static final String CABECERAXML = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
+
+	public FMWK_Implement_WebService_CreditRatings(int Request)
+			throws OException {
+		super(Request);
+		// TODO Auto-generated constructor stub
+	}
+
+	@Override
+	public void importDataWS() {
+		try {
+			// URL Endpoint
+			String sUrl = UTILGLOBAL.getVariableGlobal(SISTEMA_CONF_VAR,PROCESO, "wsdl");
+
+			LOG.printMsg(EnumTypeMessage.INFO, "URL: " + sUrl);
+
+			
+			// Get XML request
+			String sXML = this.getXMLRequest();
+
+			LOG.printMsg(EnumTypeMessage.DEBUG, "Request: " + sXML);
+			Str.printToFile("F:\\xml_consulta_credit_rating.xml", sXML);
+			CallWS ws = new CallWS(sUrl, sXML);
+			String sResponse = ws.call(sUrl, sXML);
+
+			Str.printToFile("F:\\xml_response_credit_rating.xml", sResponse);
+			LOG.printMsg(EnumTypeMessage.DEBUG, "Response: " + sResponse);
+			
+			if (sResponse !=null){
+				// XML to Table
+				LOG.printMsg(EnumTypeMessage.INFO, "Response: " + sResponse);
+				XString xstring = Str.xstringNew();
+				Table tblXML = Table.xmlStringToTable(CABECERAXML+sResponse);
+	
+				String error_msg = Str.xstringGetString(xstring);
+	
+				if (Str.iEqual(error_msg, "") == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.toInt()) {
+	
+					LOG.printMsg(EnumTypeMessage.INFO, "Successful XML To Table");
+					int retval = tblXML.condenseTable();
+
+					if (retval == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.toInt()) {
+						LOG.printMsg(EnumTypeMessage.INFO,"Condensing XML table successful");
+	
+						// Load data in tran info field from valmer web service
+						this.doSetsCreditRatings(tblXML);				
+	
+					} else {
+						LOG.printMsg(EnumTypeMessage.ERROR,"Not able to condense xml table");
+					}
+				} else {
+					LOG.printMsg(EnumTypeMessage.ERROR,"Not able to convert xml to table");
+					LOG.printMsg(EnumTypeMessage.ERROR, "Error: " + error_msg);
+				}
+				tblXML.destroy();
+			}else{
+				LOG.printMsg(EnumTypeMessage.ERROR, "Not response from webservice");			
+			}
+			//Load data in tran info field from risk class
+			//this.doLoadInstrumentBursatilityRiskClass();
+			
+		} catch (UnresolvedAddressException uae) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "UnresolvedAddressException:"+ uae.getMessage());
+			Util.exitFail();
+		} catch (NullPointerException npe) {
+			LOG.printMsg(EnumTypeMessage.ERROR,"NullPointerException:" + npe.getMessage());
+			Util.exitFail();
+		} catch (OException o) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "OException: " + o.getMessage());
+			Util.exitFail();
+		} catch (Exception e) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "Exception:" + e.getMessage());
+			Util.exitFail();
+		} finally {
+			
+			LOG.markEndScript();
+		}
+	}
+
+	@Override
+	public String getXMLRequest() throws OException
+	{
+		StringBuffer sXML = new StringBuffer();
+		
+		String sFecha = OCalendar.formatDateInt(OCalendar.today(), DATE_FORMAT.DATE_FORMAT_ISO8601);
+		sXML.append("\n <consulta><tipoConsulta>" + REQUESTTYPE+ "</tipoConsulta>");
+		sXML.append("\n <instrumento> "); 								 
+		sXML.append("\n <fecha>"+sFecha+"</fecha> "); 
+		sXML.append("\n </instrumento> ");
+		sXML.append("\n </consulta>");
+		
+		return sXML.toString();
+	}
+	
+	
+	private void doSetsCreditRatings(Table tblXml) throws OException {
+		try {
+			// Validate XML
+			Table tResp = tblXml.getTable("ws_resp", 1);
+			Table tCredtRatings = Util.NULL_TABLE;
+			int i, num_rows;
+			String sShortName = "";
+			
+			if (Table.isTableValid(tResp) == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.jvsValue()) {
+				int iRes = tResp.getInt("status", 1);
+				int iNewRow;
+				if (iRes == 1) {
+					String errMsg = tResp.getString("descripcion", 1);
+					LOG.printMsg(EnumTypeMessage.ERROR, errMsg);
+					Util.exitFail();
+				} else {
+					
+					Table tRatings = Table.tableNew("Ratings");
+					tRatings = getRatings();
+					
+					// Getting data from XML
+					tCredtRatings = tblXml.getTable("calif_emisora",1);
+					tCredtRatings.addGroupBy(2);
+					tCredtRatings.groupBy();
+					tCredtRatings.distinctRows();
+										
+					num_rows = tCredtRatings.getNumRows();
+					LOG.printMsg(EnumTypeMessage.INFO, "Emisoras con Rating : " + num_rows);
+					for(i=1;i<=num_rows;i++)
+					{
+						sShortName = tCredtRatings.getString("party", i).replace("- BU","- LE").replace("-BU","- LE");
+						LOG.printMsg(EnumTypeMessage.INFO, "Fijando Rating para : " + sShortName);
+						Table tPartyTableAll = getPartyInfoTable(sShortName);
+						
+						//if (Table.isTableValid(tPartyTableAll)==0)
+						if (Table.isTableValid(tPartyTableAll)==1)
+						{
+							
+							Table tCredtRatingsByParty = Table.tableNew("party_credit_rating");
+							
+							tCredtRatingsByParty.addCol("credit_source_id", COL_TYPE_ENUM.COL_INT);
+							//tCredtRatingsByParty.addCol("rating_name", COL_TYPE_ENUM.COL_STRING);
+							tCredtRatingsByParty.addCol("rating_id", COL_TYPE_ENUM.COL_INT);
+
+							//FITCH
+							if (tCredtRatings.getString(COL_HEADER_FITCH_NAC_LP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_FITCH_NAC_LP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_FITCH_NAC_LP,i));
+								//tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_FITCH_NAC_LP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_FITCH_NAC_LP.toInt(),tCredtRatings.getString(COL_HEADER_FITCH_NAC_LP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_FITCH_NAC_LP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_FITCH_NAC_LP,i ));
+								
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+	
+							if (tCredtRatings.getString(COL_HEADER_FITCH_NAC_CP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_FITCH_NAC_CP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_FITCH_NAC_CP,i));
+//								tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_FITCH_NAC_CP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_FITCH_NAC_CP.toInt(),tCredtRatings.getString(COL_HEADER_FITCH_NAC_CP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_FITCH_NAC_CP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_FITCH_NAC_CP,i ));
+								
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+	
+							if (tCredtRatings.getString(COL_HEADER_FITCH_GLO_LP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_FITCH_GLOB_LP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_FITCH_GLO_LP,i));
+//								tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_FITCH_GLO_LP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_FITCH_GLOB_LP.toInt(),tCredtRatings.getString(COL_HEADER_FITCH_GLO_LP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_FITCH_GLOB_LP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_FITCH_GLO_LP,i ));
+								
+							}
+	
+							if (tCredtRatings.getString(COL_HEADER_FITCH_GLO_CP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_FITCH_GLOB_CP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_FITCH_GLO_CP,i));
+//								tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_FITCH_GLO_CP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_FITCH_GLOB_CP.toInt(),tCredtRatings.getString(COL_HEADER_FITCH_GLO_CP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_FITCH_GLOB_CP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_FITCH_GLO_LP,i ));
+								
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+							
+							//S&P
+							if (tCredtRatings.getString(COL_HEADER_SP_NAC_LP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_SP_NAC_LP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_SP_NAC_LP,i));
+//								tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_SP_NAC_LP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_SP_NAC_LP.toInt(),tCredtRatings.getString(COL_HEADER_SP_NAC_LP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_SP_NAC_LP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_SP_NAC_LP,i ));
+								
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+							
+							if (tCredtRatings.getString(COL_HEADER_SP_NAC_CP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_SP_NAC_CP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_SP_NAC_CP,i));
+								//tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_SP_NAC_CP,i)));
+							
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_SP_NAC_CP.toInt(),tCredtRatings.getString(COL_HEADER_SP_NAC_CP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_SP_NAC_CP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_SP_NAC_CP,i ));
+								
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+							
+							if (tCredtRatings.getString(COL_HEADER_SP_GLO_LP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_SP_GLOB_LP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_SP_GLO_LP,i));
+//								tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_SP_GLO_LP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_SP_GLOB_LP.toInt(),tCredtRatings.getString(COL_HEADER_SP_GLO_LP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_SP_GLOB_LP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_SP_GLO_LP,i ));
+								
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+							
+							if (tCredtRatings.getString(COL_HEADER_SP_GLO_CP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_SP_GLOB_CP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_SP_GLO_CP,i));
+//								tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_SP_GLO_CP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_SP_GLOB_CP.toInt(),tCredtRatings.getString(COL_HEADER_SP_GLO_CP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_SP_GLOB_CP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_SP_GLO_CP,i ));
+							
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+							
+							//MOODY'S
+							if (tCredtRatings.getString(COL_HEADER_MOODYS_NAC_LP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_MOODYS_NAC_LP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_MOODYS_NAC_LP,i));
+//								tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_MOODYS_NAC_LP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_MOODYS_NAC_LP.toInt(),tCredtRatings.getString(COL_HEADER_MOODYS_NAC_LP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_MOODYS_NAC_LP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_MOODYS_NAC_LP,i ));
+							
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+							
+							if (tCredtRatings.getString(COL_HEADER_MOODYS_NAC_CP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_MOODYS_NAC_CP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_MOODYS_NAC_CP,i));
+//								tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_MOODYS_NAC_CP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_MOODYS_NAC_CP.toInt(),tCredtRatings.getString(COL_HEADER_MOODYS_NAC_CP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_MOODYS_NAC_CP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_MOODYS_NAC_CP,i ));
+							
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+							
+							if (tCredtRatings.getString(COL_HEADER_MOODYS_GLO_LP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_MOODYS_GLOB_LP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_MOODYS_GLO_LP,i));
+//								tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_MOODYS_GLO_LP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_MOODYS_GLOB_LP.toInt(),tCredtRatings.getString(COL_HEADER_MOODYS_GLO_LP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_MOODYS_GLOB_LP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_MOODYS_GLO_LP,i ));
+							
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+							
+							if (tCredtRatings.getString(COL_HEADER_MOODYS_GLO_CP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_MOODYS_GLOB_CP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_MOODYS_GLO_CP,i));
+//								tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_MOODYS_GLO_CP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_MOODYS_GLOB_CP.toInt(),tCredtRatings.getString(COL_HEADER_MOODYS_GLO_CP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_MOODYS_GLOB_CP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_MOODYS_GLO_CP,i ));
+							
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+							
+							//HR RATINGS
+							if (tCredtRatings.getString(COL_HEADER_HR_NAC_LP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_HRRATINGS_NAC_LP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_HR_NAC_LP,i));
+//								tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_HR_NAC_LP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_HRRATINGS_NAC_LP.toInt(),tCredtRatings.getString(COL_HEADER_HR_NAC_LP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_HRRATINGS_NAC_LP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_HR_NAC_LP,i ));
+							
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+							
+							if (tCredtRatings.getString(COL_HEADER_HR_NAC_CP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_HRRATINGS_NAC_CP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_HR_NAC_CP,i));
+//								tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_HR_NAC_CP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_HRRATINGS_NAC_CP.toInt(),tCredtRatings.getString(COL_HEADER_HR_NAC_CP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_HRRATINGS_NAC_CP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_HR_NAC_CP,i ));
+							
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+							
+							if (tCredtRatings.getString(COL_HEADER_HR_GLO_LP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_HRRATINGS_GLOB_LP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_HR_GLO_LP,i));
+//								tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_HR_GLO_LP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_HRRATINGS_GLOB_LP.toInt(),tCredtRatings.getString(COL_HEADER_HR_GLO_LP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_HRRATINGS_GLOB_LP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_HR_GLO_LP,i ));
+							
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+							
+							if (tCredtRatings.getString(COL_HEADER_HR_GLO_CP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_HRRATINGS_GLOB_CP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_HR_GLO_CP,i));
+//								tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_HR_GLO_CP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_HRRATINGS_GLOB_CP.toInt(),tCredtRatings.getString(COL_HEADER_HR_GLO_CP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_HRRATINGS_GLOB_CP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_HR_GLO_CP,i ));
+							
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+							
+							//VERUM
+							if (tCredtRatings.getString(COL_HEADER_VERUM_NAC_LP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_VERUM_NAC_LP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_VERUM_NAC_LP,i));
+//								tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_VERUM_NAC_LP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_VERUM_NAC_LP.toInt(),tCredtRatings.getString(COL_HEADER_VERUM_NAC_LP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_VERUM_NAC_LP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_VERUM_NAC_LP,i ));
+							
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+							
+							if (tCredtRatings.getString(COL_HEADER_VERUM_NAC_CP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_VERUM_NAC_CP.toInt());
+								//tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_VERUM_NAC_CP,i));
+//								tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_VERUM_NAC_CP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_VERUM_NAC_CP.toInt(),tCredtRatings.getString(COL_HEADER_VERUM_NAC_CP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_VERUM_NAC_CP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_VERUM_NAC_CP,i ));
+							
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+							
+							if (tCredtRatings.getString(COL_HEADER_VERUM_GLO_LP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_VERUM_GLOB_LP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_VERUM_GLO_LP,i));
+//								tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_VERUM_GLO_LP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_VERUM_GLOB_LP.toInt(),tCredtRatings.getString(COL_HEADER_VERUM_GLO_LP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_VERUM_GLOB_LP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_VERUM_GLO_LP,i ));
+							
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+							
+							if (tCredtRatings.getString(COL_HEADER_VERUM_GLO_CP,i)!=null)
+							{
+								iNewRow = tCredtRatingsByParty.addRow();
+								tCredtRatingsByParty.setInt("credit_source_id", iNewRow, EnumsCreditRatingSourcesMX.MX_VERUM_GLOB_CP.toInt());
+//								tCredtRatingsByParty.setString("rating_name", iNewRow, tCredtRatings.getString(COL_HEADER_VERUM_GLO_CP,i));
+//								tCredtRatingsByParty.setInt("rating_id", iNewRow, Ref.getValue(SHM_USR_TABLES_ENUM.CREDIT_RATING_TABLE,tCredtRatings.getString(COL_HEADER_VERUM_GLO_CP,i)));
+								int iRatingID = getRatingId(tRatings,EnumsCreditRatingSourcesMX.MX_VERUM_GLOB_CP.toInt(),tCredtRatings.getString(COL_HEADER_VERUM_GLO_CP,i));
+								if(iRatingID == -1)
+									LOG.printMsg(EnumTypeMessage.INFO, "No se encontro Credit Rating ID, para el Rating Source "+ EnumsCreditRatingSourcesMX.MX_VERUM_GLOB_CP.toString() + " y el Rating Name: " +tCredtRatings.getString(COL_HEADER_VERUM_GLO_CP,i ));
+							
+								tCredtRatingsByParty.setInt("rating_id", iNewRow,iRatingID );
+							}
+							
+							
+							tCredtRatingsByParty.deleteWhereValue("rating_id",-1);
+	
+							tPartyTableAll.setTable("credit_rating", 1, tCredtRatingsByParty);
+							Table tParty = Ref.retrieveParty(tPartyTableAll.getInt("party_id", 1));
+							tParty.setTable("party_credit_rating", 1, tCredtRatingsByParty);
+							Ref.updateParty(tParty);
+							//Ref.importPartyTable(tPartyTableAll);
+							tCredtRatingsByParty.destroy();
+							tParty.destroy();
+						}							
+
+						tPartyTableAll.destroy();
+					}
+				}
+			}
+		} catch (OException e) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "Final Exception : " + e.getMessage());
+		}
+	}
+	
+	
+	private int getRatingId(Table tRatings, int iCreditSoruce, String sRatingName) throws OException {
+		// TODO Auto-generated method stub
+		int iRet = -1; 
+		
+		Table tRat = Table.tableNew();
+		
+		tRat.select(tRatings, "rating_id,rating_name ", "credit_source_id EQ "+iCreditSoruce);
+		
+
+		int iFind = tRat.unsortedFindString("rating_name", sRatingName, SEARCH_CASE_ENUM.CASE_INSENSITIVE);
+		
+		if(iFind > -1 )
+			iRet = tRat.getInt("rating_id", iFind);
+		
+		
+		tRat.destroy();
+		return iRet;
+	}
+
+	/**
+	 * Nuevo metodo para obtener los credit Ratings 
+	 * @return
+	 * @throws OException 
+	 */
+	private Table getRatings() throws OException {
+		
+		Table rtnTbl = Table.tableNew();
+		String sQuery = "SELECT DISTINCT rating_id, rating_name, credit_source_id FROM credit_rating order by 3 asc";
+		
+		int iRet = -1;
+		try{
+			iRet = DBaseTable.execISql(rtnTbl, sQuery);
+		}catch(OException e)
+		{
+			LOG.printMsg(EnumTypeMessage.ERROR,e.getMessage());
+			iRet = -1;
+		}
+		
+		if(iRet != OLF_RETURN_CODE.OLF_RETURN_SUCCEED.jvsValue()){
+			LOG.printMsg(EnumTypeMessage.ERROR,"No se Lograron obtener los Credit Ratings en la query : \n"+sQuery );
+		}
+		return rtnTbl;
+	}
+
+	private Table getPartyInfoTable(String sShortName) throws OException
+	{
+		Table rtnTbl = Util.NULL_TABLE;
+		Table partyTbl = Util.NULL_TABLE;
+		Table tCounterParty = Table.tableNew();
+		int iRow, iRet;
+		String strSql;
+		
+		strSql = "select short_name party_name, party_id, party_class, int_ext party_type from party where int_ext = 1 and party_class = 0 and party_status = 1 and short_name = '" + sShortName + "'";
+		
+		try{
+			iRet = DBaseTable.execISql(tCounterParty, strSql);
+		}catch(OException e)
+		{
+			LOG.printMsg(EnumTypeMessage.ERROR,e.getMessage());
+			return rtnTbl;
+		}
+		int num_parties = tCounterParty.getNumRows();
+
+		if (num_parties>1)
+		{
+			LOG.printMsg(EnumTypeMessage.ERROR,"La consulta retorna mas de un resultado");
+			return rtnTbl;
+		}
+		
+		if (num_parties==0)
+		{
+			LOG.printMsg(EnumTypeMessage.ERROR,"No se encuentra ID para la contraparte " + sShortName);
+			return rtnTbl;
+		}		
+		
+		partyTbl = Table.tableNew("");
+		partyTbl.addCol("party_name", COL_TYPE_ENUM.COL_STRING);
+		partyTbl.addCol("party_id", COL_TYPE_ENUM.COL_INT);
+		partyTbl.addCol("party_class", COL_TYPE_ENUM.COL_INT);
+		partyTbl.addCol("party_type", COL_TYPE_ENUM.COL_INT);
+		partyTbl.addRow();
+		partyTbl.setString(1, 1, tCounterParty.getString("party_name", 1));
+		partyTbl.setInt(2, 1, tCounterParty.getInt("party_id", 1));
+		partyTbl.setInt(3, 1, tCounterParty.getInt("party_class", 1));
+		partyTbl.setInt(4, 1, tCounterParty.getInt("party_type", 1)); 
+		rtnTbl = Table.tableNew("Rtn Party Tbl");
+		rtnTbl.addCol("party_id", COL_TYPE_ENUM.COL_INT);
+		rtnTbl.addCol("note", COL_TYPE_ENUM.COL_TABLE);
+		rtnTbl.addCol("agreement", COL_TYPE_ENUM.COL_TABLE);
+		//Getting the party all info
+		iRet = Ref.exportPartyTableAll(partyTbl, rtnTbl, 1);
+
+		tCounterParty.destroy();
+		partyTbl.destroy();
+		
+		return rtnTbl;
+	}
+		
+}
+---------------------------------------------------------------------------------
+package com.afore.fmwk_webservice_imp;
+
+import java.nio.channels.UnresolvedAddressException;
+
+import mx.com.findur_valmer.main.CallWS;
+
+import com.afore.enums.EnumTypeMessage;
+import com.afore.fmwk_webservice_abstract.FMWK_Abstract_WebService;
+import com.olf.openjvs.DBUserTable;
+import com.olf.openjvs.Index;
+import com.olf.openjvs.OCalendar;
+import com.olf.openjvs.OConsole;
+import com.olf.openjvs.OException;
+import com.olf.openjvs.Str;
+import com.olf.openjvs.Table;
+import com.olf.openjvs.Util;
+import com.olf.openjvs.XString;
+import com.olf.openjvs.enums.BMO_ENUMERATION;
+import com.olf.openjvs.enums.OLF_RETURN_CODE;
+import com.olf.openjvs.enums.SEARCH_ENUM;
+
+public class FMWK_Implement_WebService_Curvas extends FMWK_Abstract_WebService{
+	
+	private static final String USER_CURVAS= "USER_MX_INDEX_VALMER";
+	private static final String PROCESO = "Imp_ValmerScene";
+	private static final String STATUS_INSTRUMENT = "0";
+	private static final String CABECERAXML = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
+	private static final int _SAVE_UNIVERSAL = 1;
+	private static final int _SAVE_CLOSE     = 1;
+	
+	public FMWK_Implement_WebService_Curvas(int Request)
+			throws OException {
+		super(Request);
+		// TODO Auto-generated constructor stub
+	}
+
+	@Override
+	public void importDataWS() {
+		try {
+			// URL Endpoint
+			String sUrl = UTILGLOBAL.getVariableGlobal(SISTEMA_CONF_VAR,PROCESO, "wsdl");
+
+			LOG.printMsg(EnumTypeMessage.INFO, "URL: " + sUrl);
+
+			//Load user table
+			Table tIndex = new Table();
+			Table tIndexCopy = new Table();	
+			tIndex.setTableName(USER_CURVAS);
+			DBUserTable.load(tIndex);
+			tIndexCopy.select(tIndex,"*","web_service EQ "+REQUESTTYPE);
+			
+			// Get XML request
+			String sXML = this.getXMLRequest(tIndexCopy);
+
+			LOG.printMsg(EnumTypeMessage.INFO, "Request: " + sXML);
+
+			CallWS ws = new CallWS(sUrl, sXML);
+			String sResponse = ws.call(sUrl, sXML);
+			
+			LOG.printMsg(EnumTypeMessage.INFO, "Response: " + sResponse);
+			
+			if (sResponse !=null){
+				// XML to Table
+				XString xstring = Str.xstringNew();
+				Table tblXML = Table.xmlStringToTable(CABECERAXML+sResponse);
+				String error_msg = Str.xstringGetString(xstring);
+	
+				if (Str.iEqual(error_msg, "") == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.toInt()) {
+	
+					LOG.printMsg(EnumTypeMessage.INFO, "Successful XML To Table");
+					int retval = tblXML.condenseTable();
+					
+					if (retval == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.toInt()) {
+						LOG.printMsg(EnumTypeMessage.INFO,"Condensing XML table successful");
+						
+//						tblXML.viewTable();
+					
+						// Load data in tran info field from valmer web service
+						this.doLoadIndexValue(tblXML, tIndexCopy);
+						
+					} else {
+						LOG.printMsg(EnumTypeMessage.ERROR,"Not able to condense xml table");
+					}
+				} else {
+					LOG.printMsg(EnumTypeMessage.ERROR,"Not able to convert xml to table");
+					LOG.printMsg(EnumTypeMessage.ERROR, "Error: " + error_msg);
+				}
+				tblXML.destroy();
+			}else{
+				LOG.printMsg(EnumTypeMessage.ERROR, "Not response from webservice");			
+			}
+			tIndex.destroy();
+			tIndexCopy.destroy();
+		} catch (UnresolvedAddressException uae) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "UnresolvedAddressException:"+ uae.getMessage());
+			Util.exitFail();
+		} catch (NullPointerException npe) {
+			LOG.printMsg(EnumTypeMessage.ERROR,"NullPointerException:" + npe.getMessage());
+			Util.exitFail();
+		} catch (OException o) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "OException: " + o.getMessage());
+			Util.exitFail();
+		} catch (Exception e) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "Exception:" + e.getMessage());
+			Util.exitFail();
+		} finally {
+			
+			LOG.markEndScript();
+		}
+	}
+
+	public String getXMLRequest(Table tIndex) throws OException {
+		
+		int iToday = OCalendar.today();
+
+		String sCurva = "", sMes = "", sDia = "", sXML = "", sTicker = "";
+		
+		if (OCalendar.getMonth(iToday) < 10) {
+			sMes = "0" + String.valueOf(OCalendar.getMonth(iToday));
+		} else
+			sMes = String.valueOf(OCalendar.getMonth(iToday));
+		if (OCalendar.getDay(iToday) < 10) {
+			sDia = "0" + String.valueOf(OCalendar.getDay(iToday));
+		} else
+			sDia = String.valueOf(OCalendar.getDay(iToday));
+
+		String sToday = String.valueOf(OCalendar.getYear(iToday)) + sMes + sDia;
+		LOG.printMsg(EnumTypeMessage.INFO, sToday);
+		
+		sXML = sXML + "\n <consulta><tipoConsulta>" + REQUESTTYPE+ "</tipoConsulta>";
+		
+		for (int iRow = 1; iRow <= tIndex.getNumRows(); iRow++) {
+			sTicker = tIndex.getString("ticker", iRow);
+
+			if (!sTicker.equals("") && sTicker != null) {
+				sCurva= "\n <instrumento> "+ 	
+							"\n <fecha>"+sToday+"</fecha> "+
+							"\n <ticker>"+sTicker+"</ticker> "+ 
+							"\n </instrumento> "; 
+
+					sXML = sXML + sCurva;			
+			}
+		}
+		sXML = sXML + "\n </consulta>";
+		
+		return sXML;		
+	}
+	
+	private void doLoadIndexValue(Table tblXml, Table tIndex) throws OException {
+		try {
+			String sTicker = "", sIndexName = "", sGridName = "";
+			double dbase = 1;
+			// Validate XML
+			Table tResp = tblXml.getTable("ws_resp", 1);
+			if (Table.isTableValid(tResp) == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.jvsValue()) {
+				int iRes = tResp.getInt("status", 1);
+				if (iRes == 1) {
+					String errMsg = tResp.getString("descripcion", 1);
+					LOG.printMsg(EnumTypeMessage.ERROR, errMsg);
+					Util.exitFail();
+				} else {
+					// Getting data from XML
+					Table tIndexValmer = tblXml.getTable("curvas", 1);
+
+					for (int iRow = 1; iRow <= tIndexValmer.getNumRows(); iRow++) {
+						
+						if (tIndexValmer.getString("estatuscurva",iRow).equalsIgnoreCase(STATUS_INSTRUMENT)){
+							
+							Table tGpts = Table.tableNew("All Gpt");
+							
+							//Getting Market Data		
+							sTicker = tIndexValmer.getString("ticker", iRow); 
+							double market_yield 	= Str.strToDouble(tIndexValmer.getString("valor", iRow));
+							
+							//Getting data from user table
+							for (int jRow = 1; jRow <= tIndex.getNumRows(); jRow++) {
+								if (sTicker.equalsIgnoreCase(tIndex.getString("ticker", jRow))){
+									sIndexName = tIndex.getString("curva", jRow);
+									sGridName = tIndex.getString("grid_point", jRow);
+									dbase = tIndex.getDouble("base", jRow);
+								}
+							}
+												
+							// Load current grid points and reset values on first grid point
+					        tGpts = Index.loadAllGpts(sIndexName);
+					        
+					        tGpts.sortCol("name");
+					        int iPos = tGpts.findString("name", sGridName,SEARCH_ENUM.FIRST_IN_GROUP);
+
+					        //Set new value Yield
+//					        tGpts.setDouble("input.mid", iPos, market_yield/dbase);
+					        tGpts.setDouble("input.mid", iPos, market_yield);
+
+					        int iRet = Index.updateGpts(tGpts, BMO_ENUMERATION.BMO_MID,_SAVE_UNIVERSAL, _SAVE_CLOSE, OCalendar.today());	        
+
+					        if(iRet == 0){
+								LOG.printMsg(EnumTypeMessage.ERROR, " No pudo ser cargado el GridPoint "+sGridName+ " de la curva "+sIndexName);			
+					        }else{
+								LOG.printMsg(EnumTypeMessage.INFO, " Se cargo correctamente el GridPoint "+sGridName+ " de la curva "+sIndexName);
+					        }
+					        //Cleanup memory
+					        tGpts.destroy();					
+							
+						}else{						
+							LOG.printMsg(EnumTypeMessage.INFO, tIndexValmer.getString("descripcionestatuscurva",iRow)+" para el GridPoint: "+tIndexValmer.getString("grid_point",iRow)+" de la curva "+tIndexValmer.getString("curva",iRow));
+						}						
+					}
+					tIndexValmer.destroy();
+				}
+			}
+		} catch (OException e) {
+			LOG.printMsg(EnumTypeMessage.ERROR, e.getMessage());
+		}		
+	}
+
+}
+----------------------------------------------------------------------------
+/**$Header: v1.0 10/01/2019 $*/
+
+/**
+ * File Name:              FMWK_Implement_WebService_Fix_Rates.java
+ * 
+ * Author:                 VMetrix International SpA
+ * Creation Date:          2018
+ * 
+ * REVISION HISTORY
+ * Date:                   10-01-2019 - Jorge Vergara - v1.0
+ * Description:            Se implementa carga de tipos de cambio desde vector en user table fix rates.
+ * 
+ *************************************************************************************/
+
+
+package com.afore.fmwk_webservice_imp;
+
+import java.nio.channels.UnresolvedAddressException;
+
+import mx.com.findur_valmer.main.CallWS;
+
+import com.afore.enums.EnumTypeMessage;
+import com.afore.fmwk_webservice_abstract.FMWK_Abstract_WebService;
+import com.afore.fmwk_webservice_enums.EnumAforeWebService;
+import com.olf.openjvs.DBUserTable;
+import com.olf.openjvs.DBaseTable;
+import com.olf.openjvs.OCalendar;
+import com.olf.openjvs.OConsole;
+import com.olf.openjvs.ODateTime;
+import com.olf.openjvs.OException;
+import com.olf.openjvs.Str;
+import com.olf.openjvs.Table;
+import com.olf.openjvs.Util;
+import com.olf.openjvs.XString;
+import com.olf.openjvs.enums.COL_TYPE_ENUM;
+import com.olf.openjvs.enums.DATE_FORMAT;
+import com.olf.openjvs.enums.OLF_RETURN_CODE;
+
+public class FMWK_Implement_WebService_Fix_Rates extends FMWK_Abstract_WebService{
+
+	private static final String PROCESO = "Imp_ValmerScene";
+	private static final String CABECERAXML = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
+	
+	private static final String USER_INDEX_VALMER= "USER_MX_INDEX_VALMER";
+	private static final String USER_FIX_RATES= "user_mx_fix_rates"; 
+	
+	private int iToday;
+	private String sToday ="";
+	
+	public FMWK_Implement_WebService_Fix_Rates(int iRequest)
+			throws OException {
+		super(iRequest);
+		// TODO Auto-generated constructor stub
+	}
+
+	
+	@Override
+	public void importDataWS() {
+		try {
+			iToday = OCalendar.today();
+			sToday = OCalendar.formatJd(iToday, DATE_FORMAT.DATE_FORMAT_ISO8601);
+
+			ODateTime dt = new ODateTime();
+			dt.setDate(iToday);
+			
+			// URL Endpoint
+			String sUrl = UTILGLOBAL.getVariableGlobal(SISTEMA_CONF_VAR,PROCESO, "wsdl");
+			
+			LOG.printMsg(EnumTypeMessage.INFO, "URL: " + sUrl);
+
+			Table tUserTableVector = Table.tableNew(USER_FIX_RATES);
+
+			// Get XML request
+			String sXML = getXMLRequest();
+
+			LOG.printMsg(EnumTypeMessage.INFO, "Excecuting Web Service ... ");
+			CallWS ws = new CallWS(sUrl, sXML);
+			String sResponse = ws.call(sUrl, sXML);
+			
+			if (sResponse !=null){
+				
+				//Str.printToFile("F:\\xml_response_vector_precios_Conta.xml", sResponse.replace("><", ">\n<"), 0); //TODO SOLO DEBUG: Response
+				
+				// XML to Table
+				XString xstring = Str.xstringNew();
+				Table tblXML = Table.xmlStringToTable(CABECERAXML+sResponse);
+				String error_msg = Str.xstringGetString(xstring);
+	
+				if (Str.iEqual(error_msg, "") == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.toInt()) {
+	
+					LOG.printMsg(EnumTypeMessage.INFO, "Successful XML To Table");
+					int retval = tblXML.condenseTable();
+					
+					if (retval == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.toInt()) {
+						LOG.printMsg(EnumTypeMessage.INFO,"Condensing XML table successful");
+					
+						// Load data from Vector into Daily User Table
+						Table tWSVectorValmer = Table.tableNew("Fix Rates Vector Valmer Conta");
+						tWSVectorValmer = tblXML.getTable("instrumentos", 1);
+						
+						if(Table.isTableValid(tWSVectorValmer)==1 && tWSVectorValmer.getNumRows()> 0){
+							doDeleteRowsByDate(USER_FIX_RATES, dt);
+							DBUserTable.structure(tUserTableVector);
+							doSaveVector(tWSVectorValmer, tUserTableVector);
+
+						}else {
+							LOG.printMsg(EnumTypeMessage.ERROR,"Empty Response from Web Service, 0 Results");
+							Util.exitFail("Exit Fail - Empty Response from Web Service");
+						}	
+						
+					} else {
+						LOG.printMsg(EnumTypeMessage.ERROR,"Not able to condense xml table");
+						Util.exitFail("Not able to condense xml table");
+					}
+				} else {
+					LOG.printMsg(EnumTypeMessage.ERROR,"Not able to convert xml to table");
+					LOG.printMsg(EnumTypeMessage.ERROR, "Error: " + error_msg);
+					Util.exitFail("Not able to convert xml to table ::: " + error_msg);
+				}
+				tblXML.destroy();
+			}else{
+				LOG.printMsg(EnumTypeMessage.ERROR, "Not response from webservice");			
+			}
+			
+			tUserTableVector.destroy();
+
+			
+		} catch (UnresolvedAddressException uae) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "UnresolvedAddressException:"+ uae.getMessage());
+			Util.exitFail();
+		} catch (NullPointerException npe) {
+			LOG.printMsg(EnumTypeMessage.ERROR,"NullPointerException:" + npe.getMessage());
+			Util.exitFail();
+		} catch (OException o) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "OException: " + o.getMessage());
+			Util.exitFail();
+		} catch (Exception e) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "Exception:" + e.getMessage());
+			Util.exitFail();
+		} catch (Throwable e) {
+			LOG.printMsg(EnumTypeMessage.ERROR, "Throwable:" + e.getMessage());
+			Util.exitFail();
+		} finally {			
+			LOG.markEndScript();
+		}
+	}
+	
+	public String getXMLRequest() throws OException {
+		
+		String sTicker = "";
+		String sStrXml = "";
+		
+		//Obtiene Lista de Tickers FIX desde User Table
+		Table tIndex = new Table();       
+		String sSql = "SELECT * FROM " + USER_INDEX_VALMER + " WHERE web_service = " + REQUESTTYPE;
+		
+        try {
+        	DBaseTable.execISql(tIndex, sSql);
+        	
+        } catch (OException exception){
+        	LOG.printMsg(EnumTypeMessage.ERROR, "DBaseTable.execISql() failed: " + sSql);
+        	tIndex.destroy();
+            Util.exitFail();
+        }
+        
+//		String sXML = "\n <consulta><tipoConsulta>" + REQUESTTYPE+ "</tipoConsulta>";
+		String sXML = "\n <consulta><tipoConsulta>" + EnumAforeWebService.MX_WS_LOAD_VECTOR_CONTA.value()+"</tipoConsulta>";
+		
+		if(tIndex.getNumRows() <= 0) LOG.printMsg(EnumTypeMessage.ERROR, "No existen tickers de FIX declarados en " + USER_INDEX_VALMER);
+		
+		for (int iRow = 1; iRow <= tIndex.getNumRows(); iRow++) {
+			sTicker = tIndex.getString("ticker", iRow);
+			LOG.printMsg(EnumTypeMessage.INFO, "Ticker Seleccionado: " + sTicker);
+			if (!sTicker.equals("") && sTicker != null) {
+				sStrXml= "\n <instrumento> "+ 	
+							"\n <fecha>"+sToday+"</fecha> "+
+							"\n <ticker>"+sTicker+"</ticker> "+ 
+							"\n </instrumento> "; 
+
+				sXML = sXML + sStrXml;			
+			}
+		}
+		sXML = sXML + "\n </consulta>";
+		
+		if(Table.isTableValid(tIndex)==1)tIndex.destroy();
+		
+		return sXML;
+	}
+	
+	/**
+	 * Borra User Table por Fecha.
+	 * @param sNameUserTable
+	 * @param dtDateClearData
+	 * @throws OException
+	 */
+	private void doDeleteRowsByDate(String sNameUserTable, ODateTime dtDateClearData) throws OException
+	{
+		Table tUserTable = Util.NULL_TABLE;
+		
+		LOG.printMsg(EnumTypeMessage.INFO, "Deleting Rows ON " + sNameUserTable + " for Process Date");
+    	try{
+
+    		tUserTable = new Table(sNameUserTable);
+    		
+			tUserTable.addCol("fecha", COL_TYPE_ENUM.COL_DATE_TIME);
+			tUserTable.addRow();
+			
+			tUserTable.setColValDateTime("fecha", dtDateClearData);
+			
+			if (tUserTable.getNumRows() > 0 ) {
+				
+				int ret = DBUserTable.delete(tUserTable);
+				
+				if (ret != OLF_RETURN_CODE.OLF_RETURN_SUCCEED.toInt()){
+	                OConsole.oprint("ERROR: Failure Deleting Rows in user_me\n");
+				}
+			}
+	    	
+    	}catch (Throwable e){
+    		LOG.printMsg(EnumTypeMessage.ERROR, e.getMessage());
+		
+    	}finally{
+    		
+    		if(Table.isTableValid(tUserTable) == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.toInt()) tUserTable.destroy();
+    	}
+	}
+
+	private void doSaveVector(Table tVectorPrecios,Table tUserTableVectorPrecios) throws OException
+	{
+
+		int i, iNewRow;
+		ODateTime dt = new ODateTime();
+		dt.setDate(iToday);
+		
+		int iRows = tVectorPrecios.getNumRows();
+
+		for(i=1;i<=iRows;i++)
+		{
+			iNewRow = tUserTableVectorPrecios.addRow();
+
+			tUserTableVectorPrecios.setString("ticker", iNewRow, tVectorPrecios.getString("ticker", i));
+			tUserTableVectorPrecios.setDouble("fix_value", iNewRow, Str.isDouble(tVectorPrecios.getString("precio_sucio", i)) == 1 ? Str.strToDouble(tVectorPrecios.getString("precio_sucio", i)) : 0);
+
+		}
+		
+		tUserTableVectorPrecios.setColValDateTime("fecha", dt);
+		int iRetval = DBUserTable.bcpIn(tUserTableVectorPrecios);
+		if (iRetval == OLF_RETURN_CODE.OLF_RETURN_SUCCEED.toInt())
+			 LOG.printMsg(EnumTypeMessage.INFO, tUserTableVectorPrecios.getNumRows() + " rows inserted successfully ON " + tUserTableVectorPrecios.getTableName());
+
+		if (iRetval != OLF_RETURN_CODE.OLF_RETURN_SUCCEED.toInt()){
+            LOG.printMsg(EnumTypeMessage.ERROR, DBUserTable.dbRetrieveErrorInfo(iRetval, "Insert Rows failed..."));
+		}	
+	}
+	
+
+}
